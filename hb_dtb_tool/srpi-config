@@ -1,0 +1,281 @@
+#!/bin/bash
+
+function warn_box () {
+    text="$1"
+    return $(whiptail --title "WARNNING" \
+                --msgbox "$text" \
+                10 $((TTY_X - 80)) \
+                3>&1 1>&2 2>&3)
+}
+
+function update_status (){
+    local dtb_name=$1
+    local options=()
+    local confstate=
+    for peri in ${!peri_status[@]}
+    do
+        status=`fdtget -t s ${dtb_name} ${peri} status 2> /dev/null`
+        if [ ! -z $status ];then
+            peri_status[${peri}]="$status"
+        fi
+        options+=("$peri" "                     ${peri_status[$peri]}")
+    done
+    menustr="Peripherals config"
+    peri_select=$(whiptail --title "${titlestr}" \
+            --backtitle "${backtitle}" \
+            --menu "${menustr}" \
+            "${TTY_Y}" "${TTY_X}" $((TTY_Y - 8)) \
+            "${options[@]}" \
+            --cancel-button "Exit" \
+            --ok-button Select \
+            3>&1 1>&2 2>&3)
+    ret=$?
+    if [ $ret -ne 0 ];then 
+        return 1 
+    fi
+    unset options
+    # echo peri_select=$peri_select
+    # echo peri_status=${peri_status[$peri_select]}
+    peri_ops ${dtb_name} $peri_select ${peri_status[$peri_select]}
+    ret=$?
+    if [ $ret -eq "0" ];then
+        if [ "x${peri_status[$peri_select]}" == x"okay" ];then
+            confstate="disabled"
+        elif [ "x${peri_status[$peri_select]}" == x"disabled" ];then
+            confstate="okay"
+        else
+            warn_box "undefined fdt node status !"
+        fi
+        apply_status ${dtb_name} ${peri_select} ${confstate}
+        ret=$?
+        if [ $ret -ne "0" ];then
+            warn_box "fdtput get some err: ${options} ${peri_select} !"
+        fi
+        unset confstate
+    fi
+}
+
+function apply_status() {
+    local dtb_name=$1
+    local peri=$2
+    local status=$3
+    local array=${conf_peris[$peri]}
+    local confstate="disabled"
+    array=${array//,/ }
+    if [ "x${status}" == x"okay" ];then
+        confstate="disabled"
+    elif [ "x${status}" == x"disabled" ];then
+        :
+    else
+        warn_box "undefined fdt node status !"
+    fi
+    for cp in "${array}"
+    do
+        fdtput -t s ${dtb_name} ${cp} status ${confstate} 2> /dev/null
+    done
+    apply_state="true"
+    return $(fdtput -t s ${dtb_name} ${peri} status ${status} 2> /dev/null)
+}
+
+function peri_ops() {
+    local dtb_name=$1
+    local peri=$2
+    local status=$3
+    local options=()
+    local string=()
+    local somep="false"
+    local cperis=
+    if [ "x${status}" == x"okay" ];then
+        options=("dis")
+    else
+        options=("en")
+    fi
+    if [ ! -z "${conf_peris[$peri]}" ];then
+        peris=${conf_peris[$peri]}
+        for cperi in ${peris//,/ }
+        do
+            if [ x${peri_status[$cperi]} == x"okay" ];then
+                somep="true"
+                cperis="${cperis} ${cperi}"
+            fi
+        done
+        if [ x${somep} == x"true" ];then
+            string=("Doing this and the ${cperis[@]} will be disabled")
+        else
+            string=("")
+        fi
+    else
+        string=("")
+    fi
+    whiptail --title "Your select" \
+                --yesno "Are you sure want to ${options}able $peri? \
+                \n${string}" \
+                10 $((TTY_X - 80)) \
+                3>&1 1>&2 2>&3
+    ret=$?
+    if [ $ret -eq 0 ];then
+        for cperi in ${peris//,/ }
+        do
+            if [ x${peri_status[$cperi]} == x"okay" ];then
+                apply_status ${dtb_name} $cperi "disabled"
+                ret=$?
+                if [ $ret -ne "0" ];then
+                    warn_box "fdtput get some err: $options $cperi !"
+                    return ret
+                fi
+            fi
+        done
+    fi
+    return $ret
+} 
+
+path=`pwd`
+TTY_X=$(($(stty size | awk '{print $2}')-6)) 
+TTY_Y=$(($(stty size | awk '{print $1}')-6))
+
+which whiptail > /dev/null
+ret=$?
+if [ $ret -ne 0 ];then
+    echo "Your terminal maybe too small to run $0"
+    exit -1
+fi
+
+if [ $((TTY_Y - 8)) -lt 1 ];then
+    echo "Your terminal maybe too small to run $0"
+    exit -1
+fi
+
+board_id=$(cat /sys/class/socinfo/board_id)
+board_type=$((0x$board_id & 0xfff))
+hex_btype=$(printf "0x%x" $board_type)
+
+rootsource=$(findmnt -n -o SOURCE / | sed 's~\[.*\]~~')
+rootdevice=$(echo $rootsource | sed -e "s/^\/dev\///")
+rootpartnum=${rootdevice##mmc*p}
+if [ $rootpartnum -gt 2 ];then
+    case $hex_btype in
+    "0x104"|"0x304")
+        config="/etc/hobot.conf/sdbv3.conf"
+        ;;
+    "0x404")
+        config="/etc/hobot.conf/sdbv4.conf"
+        ;;
+    *)
+        echo "Unsupport board type!!"
+        exit -1
+        ;;
+    esac    
+    partnum=`parted /dev/mmcblk0 print -sm | grep ":boot" | awk -F ':' '{print $1}'`
+    partdev="/dev/mmcblk0p${partnum}"
+    bootfile="/tmp/boot.img"
+    dd if=${partdev} of=${bootfile} bs=1M count=10 > /dev/null
+    ret=$?
+    if [[ $ret -ne 0 ]] || [[ ! -f ${bootfile} ]];then
+        echo "dd is failed or ${bootfile} is not exist!"
+        exit -1
+    fi
+    dtb_name=`hb_dtb_tool -i ${bootfile} -b ${board_type} -g|grep dtb_name |awk '{print $2}'`
+    if [ ! -n $dtb_name ];then
+    echo "hb_dtb_tool get ${board_type} failed!"
+    exit -1
+    fi
+elif [ $rootpartnum -eq 1 ] || [ $rootpartnum -eq 2 ];then
+    if [ -d "/boot/hobot" ];then
+        config="/etc/hobot.conf/x3pi.conf"
+        case $hex_btype in
+        "0x101"|"0x102")
+            dtb_name="hobot-x3-dvb.dtb"
+            ;;
+        "0x103"|"0x203")
+            dtb_name="hobot-xj3-cvb.dtb"
+            ;;
+        "0x104"|"0x304")
+            dtb_name="hobot-x3-sdb.dtb"
+            ;;
+        "0x404")
+            dtb_name="hobot-x3-sdb_v4.dtb"
+            ;;
+        "0x504")
+            dtb_name="hobot-x3-pi.dtb"
+            ;;
+        "0x604")
+            dtb_name="hobot-x3-pi.dtb"
+            ;;
+        "0xb04")
+            config="/etc/hobot.conf/x3cm.conf"
+            dtb_name="hobot-x3-cm.dtb"
+            ;;
+        "0x201"|"0x202")
+            dtb_name="hobot-j3-dvb.dtb"
+            ;;
+        *)
+            echo "Unsupport board type!!"
+            exit -1
+            ;;
+        esac
+        if [ -f "/boot/hobot/${dtb_name}" ];then
+            cp "/boot/hobot/${dtb_name}" ${dtb_name}
+        else
+            echo "Dtb file not exist!!"
+            exit -1
+        fi
+    fi
+fi
+if [ -z $dtb_name ];then
+    echo "No dtb file find!!"
+    exit -1
+fi
+# echo dtb_name $dtb_name
+titlestr="Choose an option"
+backtitle="Verison v0.1"
+menustr="Peripheral Setup"
+declare -A peri_status
+declare -A conf_peris
+
+apply_state="false"
+
+if [ ! -f $config ];then
+  echo "file ${config} is not exist!"
+  exit -1
+fi
+
+
+for line in $(cat $config)
+do
+    arr=(${line//:/ })
+    peri=${arr[0]}
+    peri_status[$peri]="unkowned"
+    conf_peris[$peri]=${arr[1]}
+done
+
+while true; do
+    update_status $dtb_name
+    ret=$?
+    if [ $ret -ne 0 ];then
+        break
+    fi
+done
+
+if [ $rootpartnum -gt 2 ];then
+    if [ x${apply_state} == x"true" ];then
+        hb_dtb_tool -i ${bootfile} -b ${board_type} -s $dtb_name
+        ret=$?
+        if [ $ret -ne 0 ];then
+            echo "hb_dtb_tool -s is failed!"
+            exit -1
+        fi
+        dd if=${bootfile} of=${partdev}  > /dev/null
+        ret=$?
+        if [ $ret -ne 0 ];then
+            echo "dd is failed!"
+            exit -1
+        fi
+        sync
+    fi
+elif [ $rootpartnum -eq 1 ] || [ $rootpartnum -eq 2 ];then
+    if [ x${apply_state} == x"true" ];then
+        cp ${dtb_name} "/boot/hobot/${dtb_name}"
+    fi
+fi
+rm -rf $dtb_name ${bootfile}
+exit 0

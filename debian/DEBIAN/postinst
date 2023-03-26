@@ -1,0 +1,15 @@
+#!/bin/bash
+echo "Postinst start pwd is `pwd`"
+
+cd /usr/lib/hobot-gpio
+which python3 > /dev/null
+if [ $? -ne 0 ];then
+    echo -e "Please apt install python3 first and then reinstall this package!"
+    cd -
+    # rm -rf /usr/lib/hobot-gpio/hobot-gpio
+    exit 0
+fi
+/usr/bin/python3 ./setup.py install
+cd - > /dev/null
+exit 0
+

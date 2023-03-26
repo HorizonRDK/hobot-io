@@ -1,0 +1,19 @@
+Metadata-Version: 2.1
+Name: Hobot.GPIO
+Version: 0.0.2
+Summary: A module to control Hobot GPIO channels
+Home-page: UNKNOWN
+Author: HORIZON
+Author-email: pengfei.xu@horizon.ai
+License: MIT
+Description: UNKNOWN
+Keywords: Hobot GPIO
+Platform: UNKNOWN
+Classifier: Operating System :: POSIX :: Linux
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Intended Audience :: Developers
+Classifier: Programming Language :: Python :: 2.7
+Classifier: Programming Language :: Python :: 3
+Classifier: Topic :: Software Development
+Classifier: Topic :: System :: Hardware
+Description-Content-Type: text/markdown

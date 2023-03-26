@@ -1,0 +1,6 @@
+*.o
+*.so
+*.a
+*.patch
+*.vscode
+hb_dtb_tool
