@@ -144,12 +144,45 @@ X3_CM_PIN = [
     ["soc/a6003000.gpio", 104, 40, 21, 'I2S0_SDIO', 'I2S0_SDIO', None, None],
 ]
 
+X3_PI_V2_1_PIN = [
+    ["soc/a6003000.gpio", 9, 3, 2, 'I2C0_SDA', 'I2C0_SDA', None, None],
+    ["soc/a6003000.gpio", 8, 5, 3,'I2C0_SCL', 'I2C0_SCL', None, None],
+    ["soc/a6003000.gpio", 101, 7, 4, 'I2S0_MCLK', 'I2S0_MCLK', None, None],
+    ["soc/a6003000.gpio", 12, 11, 17, 'GPIO17', 'SPI2_MOSI', "soc/a500f000.pwm", 1],
+    ["soc/a6003000.gpio", 13, 13, 27,'GPIO27', 'SPI2_MISO', "soc/a500f000.pwm", 2],
+    ["soc/a6003000.gpio", 30, 15, 22, 'GPIO22', 'BIFSPI_MISO', None, None],
+    ["soc/a6003000.gpio", 6, 19, 10, 'SPI1_MOSI', 'SPI1_MOSI', None, None],
+    ["soc/a6003000.gpio", 7, 21, 9, 'SPI1_MISO', 'SPI1_MISO', None, None],
+    ["soc/a6003000.gpio", 3, 23, 11, 'SPI1_SCLK', 'SPI1_SCLK', None, None],
+    ["soc/a6003000.gpio", 15, 27, 0, 'I2C3_SDA', 'I2C3_SDA', None, None],
+    ["soc/a6003000.gpio", 119, 29, 5, 'GPIO5', 'LPWM3', None, None],
+    ["soc/a6003000.gpio", 118, 31, 6, 'GPIO6', 'LPWM4', None, None],
+    ["soc/a6003000.gpio", 4, 33, 13, 'PWM0', 'PWM0', "soc/a500d000.pwm", 0],
+    ["soc/a6003000.gpio", 103, 35, 19, 'I2S0_LRCK', 'I2S0_LRCK', None, None],
+    ["soc/a6003000.gpio", 117, 37, 26, 'GPIO25', 'LPWM5', None, None],
+
+    ["soc/a6003000.gpio", 111, 8, 14, 'UART_TXD', 'UART3_TXD', None, None],
+    ["soc/a6003000.gpio", 112, 10, 15, 'UART_RXD', 'UART3_RXD', None, None],
+    ["soc/a6003000.gpio", 102, 12, 18, 'I2S0_BCLK', 'I2S0_BCLK', None, None],
+    ["soc/a6003000.gpio", 27, 16, 23, 'GPIO23', 'BIFSPI_CSN', None, None],
+    ["soc/a6003000.gpio", 22, 18, 24, 'GPIO24', 'PWM1', "soc/a500d000.pwm", 1],
+    ["soc/a6003000.gpio", 29, 22, 25, 'GPIO25', 'BIFSPI_MOSI', None, None],
+    ["soc/a6003000.gpio", 5, 24, 8, 'SPI1_CSN', 'SPI1_CSN', None, None],
+    ["soc/a6003000.gpio", 28, 26, 7, 'GPIO7', 'BIFSPI_SCLK', None, None],
+    ["soc/a6003000.gpio", 14, 28, 1, 'I2C3_SCL', 'I2C3_SCL', None, None],
+    ["soc/a6003000.gpio", 25, 32, 12, 'PWM4', 'PWM4', "soc/a500e000.pwm", 1],
+    ["soc/a6003000.gpio", 20, 36, 16, 'GPIO16', 'BIFSD_CLK', None, None],
+    ["soc/a6003000.gpio", 104, 38, 20, 'I2S0_SDIO', 'I2S0_SDIO', None, None],
+    ["soc/a6003000.gpio", 108, 40, 21, 'I2S1_SDIO', 'I2S1_SDIO', None, None],
+]
+
 ALL_BOARD_DATA = [
     {'board_name' : 'X3SDBV3', 'pin_info' : SDBV3_PIN, 'board_id' : 0x304},
     {'board_name' : 'X3SDB', 'pin_info' : SDB_PIN, 'board_id' : 0x404},
     {'board_name' : 'X3PI', 'pin_info' : X3_PI_PIN, 'board_id' : 0x504},
     {'board_name' : 'X3PI', 'pin_info' : X3_PI_PIN, 'board_id' : 0x604},
-    {'board_name' : 'X3CM', 'pin_info' : X3_CM_PIN, 'board_id' : 0xb04}
+    {'board_name' : 'X3CM', 'pin_info' : X3_CM_PIN, 'board_id' : 0xb04},
+    {'board_name' : 'X3PI_V2_1', 'pin_info' : X3_PI_V2_1_PIN, 'board_id' : 0x804}
 ]
 
 
@@ -179,7 +212,7 @@ def get_all_pin_data():
         sboard_id = "0x" + f.read()
         iboard_id = int(sboard_id,16)
         board_id = iboard_id & 0xfff
-
+        print("BORAD ID is:%d" %(board_id))
     for board_data in ALL_BOARD_DATA:
         if board_data['board_id'] == board_id:
             pin_data = copy.deepcopy(board_data['pin_info'])
