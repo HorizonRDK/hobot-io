@@ -212,7 +212,6 @@ def get_all_pin_data():
         sboard_id = "0x" + f.read()
         iboard_id = int(sboard_id,16)
         board_id = iboard_id & 0xfff
-        print("BORAD ID is:%d" %(board_id))
     for board_data in ALL_BOARD_DATA:
         if board_data['board_id'] == board_id:
             pin_data = copy.deepcopy(board_data['pin_info'])
