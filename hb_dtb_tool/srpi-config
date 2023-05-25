@@ -201,6 +201,9 @@ elif [ $rootpartnum -eq 1 ] || [ $rootpartnum -eq 2 ];then
         "0x604")
             dtb_name="hobot-x3-pi.dtb"
             ;;
+        "0x804")
+            dtb_name="hobot-x3-pi_v2_1.dtb"
+            ;;
         "0xb04")
             config="/etc/hobot.conf/x3cm.conf"
             dtb_name="hobot-x3-cm.dtb"
