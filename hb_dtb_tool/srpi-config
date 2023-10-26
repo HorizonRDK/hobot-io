@@ -1,7 +1,5 @@
 #!/bin/bash
 
-set -x
-
 INTERACTIVE=True
 ASK_TO_REBOOT=0
 CONFIG=/boot/config.txt
@@ -754,7 +752,7 @@ peri_ops() {
     done
   fi
   return $ret
-} 
+}
 
 do_peripheral() {
   board_id=$(cat /sys/class/socinfo/board_id)
@@ -776,7 +774,7 @@ do_peripheral() {
           echo "Unsupport board type!!"
           exit -1
           ;;
-      esac    
+      esac
       partnum=`parted /dev/mmcblk0 print -sm | grep ":boot" | awk -F ':' '{print $1}'`
       partdev="/dev/mmcblk0p${partnum}"
       bootfile="/tmp/boot.img"
@@ -1192,7 +1190,7 @@ do_system_menu() {
     "S5 Power LED" "Set behaviour of power LED" \
     "S6 Browser" "Choose default web browser" \
     3>&1 1>&2 2>&3)
-  
+
   RET=$?
   if [ $RET -eq 1 ]; then
     return 0
@@ -1213,7 +1211,7 @@ do_display_menu() {
   FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Display Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
     "D1 VNC Resolution" "Set resolution for headless use" \
     3>&1 1>&2 2>&3)
-      
+
   RET=$?
   if [ $RET -eq 1 ]; then
     return 0
@@ -1383,3 +1381,4 @@ if [ "$INTERACTIVE" = True ]; then
     fi
   done
 fi
+
