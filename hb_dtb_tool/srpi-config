@@ -1,284 +1,1384 @@
 #!/bin/bash
 
-function warn_box () {
-    text="$1"
-    return $(whiptail --title "WARNNING" \
-                --msgbox "$text" \
-                10 $((TTY_X - 80)) \
-                3>&1 1>&2 2>&3)
+INTERACTIVE=True
+ASK_TO_REBOOT=0
+CONFIG=/boot/config.txt
+CMDLINE=/proc/cmdline
+
+USER=${SUDO_USER:-$(who -m | awk '{ print $1 }')}
+if [ -z "$USER" ] && [ -n "$HOME" ]; then
+  USER=$(getent passwd | awk -F: "\$6 == \"$HOME\" {print \$1}")
+fi
+if [ -z "$USER" ] || [ "$USER" = "root" ]; then
+  USER=$(getent passwd | awk -F: '$3 == "1000" {print $1}')
+fi
+
+is_rdk () {
+  ARCH=$(dpkg --print-architecture)
+  if [ "$ARCH" = "arm64" ] ; then
+    return 0
+  else
+    return 1
+  fi
 }
 
-function update_status (){
-    local dtb_name=$1
-    local options=()
-    local confstate=
-    for peri in ${!peri_status[@]}
-    do
-        status=`fdtget -t s ${dtb_name} ${peri} status 2> /dev/null`
-        if [ ! -z $status ];then
-            peri_status[${peri}]="$status"
-        fi
-        options+=("$peri" "                     ${peri_status[$peri]}")
-    done
-    menustr="Peripherals config"
-    peri_select=$(whiptail --title "${titlestr}" \
-            --backtitle "${backtitle}" \
-            --menu "${menustr}" \
-            "${TTY_Y}" "${TTY_X}" $((TTY_Y - 8)) \
-            "${options[@]}" \
-            --cancel-button "Exit" \
-            --ok-button Select \
-            3>&1 1>&2 2>&3)
-    ret=$?
-    if [ $ret -ne 0 ];then 
-        return 1 
+is_rdk1() {
+  grep -q "^5$" /sys/class/socinfo/som_name
+  return $?
+}
+
+is_rdk1_2() {
+  grep -q "^6$" /sys/class/socinfo/som_name
+  return $?
+}
+
+is_rdk2() {
+  grep -q "^8$" /sys/class/socinfo/som_name
+  return $?
+}
+
+is_rdkmd() {
+  grep -q "^b$" /sys/class/socinfo/som_name
+  return $?
+}
+
+get_rdk_type() {
+  if is_rdk1; then
+    echo 5
+  elif is_rdk1_2; then
+    echo 6
+  elif is_rdk2; then
+    echo 8
+  elif is_rdkmd; then
+    echo b
+  else
+    echo -1
+  fi
+}
+
+is_installed() {
+  if [ "$(dpkg -l "$1" 2> /dev/null | tail -n 1 | cut -d ' ' -f 1)" != "ii" ]; then
+    return 1
+  else
+    return 0
+  fi
+}
+
+calc_wt_size() {
+  # NOTE: it's tempting to redirect stderr to /dev/null, so supress error
+  # output from tput. However in this case, tput detects neither stdout or
+  # stderr is a tty and so only gives default 80, 24 values
+  WT_HEIGHT=18
+  WT_WIDTH=$(tput cols)
+
+  if [ -z "$WT_WIDTH" ] || [ "$WT_WIDTH" -lt 60 ]; then
+    WT_WIDTH=80
+  fi
+  if [ "$WT_WIDTH" -gt 178 ]; then
+    WT_WIDTH=120
+  fi
+  WT_MENU_HEIGHT=$((WT_HEIGHT - 7))
+}
+
+do_about() {
+  whiptail --msgbox "\
+This tool provides a straightforward way of doing initial
+configuration of the RDK. Although it can be run
+at any time, some of the options may have difficulties if
+you have heavily customised your installation.\
+" 20 70 1
+  return 0
+}
+
+do_change_pass() {
+  whiptail --msgbox "You will now be asked to enter a new password for the $USER user" 20 60 1
+  passwd $USER &&
+  whiptail --msgbox "Password changed successfully" 20 60 1
+}
+
+set_config_var() {
+  lua - "$1" "$2" "$3" <<EOF > "$3.bak"
+local key=assert(arg[1])
+local value=assert(arg[2])
+local fn=assert(arg[3])
+local file=assert(io.open(fn))
+local made_change=false
+for line in file:lines() do
+  if line:match("^#?%s*"..key.."=.*$") then
+    line=key.."="..value
+    made_change=true
+  end
+  print(line)
+end
+
+if not made_change then
+  print(key.."="..value)
+end
+EOF
+mv "$3.bak" "$3"
+}
+
+clear_config_var() {
+  lua - "$1" "$2" <<EOF > "$2.bak"
+local key=assert(arg[1])
+local fn=assert(arg[2])
+local file=assert(io.open(fn))
+for line in file:lines() do
+  if line:match("^%s*"..key.."=.*$") then
+    line="#"..line
+  end
+  print(line)
+end
+EOF
+mv "$2.bak" "$2"
+}
+
+get_config_var() {
+  lua - "$1" "$2" <<EOF
+local key=assert(arg[1])
+local fn=assert(arg[2])
+local file=assert(io.open(fn))
+local found=false
+for line in file:lines() do
+  local val = line:match("^%s*"..key.."=(.*)$")
+  if (val ~= nil) then
+    print(val)
+    found=true
+    break
+  end
+end
+if not found then
+   print(0)
+end
+EOF
+}
+
+is_uname_current() {
+  test -d "/lib/modules/$(uname -r)"
+}
+
+do_change_locale() {
+  if [ "$INTERACTIVE" = True ]; then
+    dpkg-reconfigure locales
+  else
+    if ! LOCALE_LINE="$(grep -E "^$1( |$)" /usr/share/i18n/SUPPORTED)"; then
+      return 1
     fi
-    unset options
-    # echo peri_select=$peri_select
-    # echo peri_status=${peri_status[$peri_select]}
-    peri_ops ${dtb_name} $peri_select ${peri_status[$peri_select]}
-    ret=$?
-    if [ $ret -eq "0" ];then
-        if [ "x${peri_status[$peri_select]}" == x"okay" ];then
-            confstate="disabled"
-        elif [ "x${peri_status[$peri_select]}" == x"disabled" ];then
-            confstate="okay"
+    export LC_ALL=C
+    export LANG=C
+    LG="/etc/locale.gen"
+    NEW_LANG="$(echo $LOCALE_LINE | cut -f1 -d " ")"
+    [ -L "$LG" ] && [ "$(readlink $LG)" = "/usr/share/i18n/SUPPORTED" ] && rm -f "$LG"
+    echo "$LOCALE_LINE" > /etc/locale.gen
+    update-locale --no-checks LANG
+    update-locale --no-checks "LANG=$NEW_LANG"
+    dpkg-reconfigure -f noninteractive locales
+  fi
+}
+
+do_change_timezone() {
+  if [ "$INTERACTIVE" = True ]; then
+    dpkg-reconfigure tzdata
+  else
+    TIMEZONE="$1"
+    if [ ! -f "/usr/share/zoneinfo/$TIMEZONE" ]; then
+      return 1;
+    fi
+    rm /etc/localtime
+    echo "$TIMEZONE" > /etc/timezone
+    dpkg-reconfigure -f noninteractive tzdata 2> /dev/null
+  fi
+}
+
+do_configure_keyboard() {
+  printf "Reloading keymap. This may take a short while\n"
+  rm -f /etc/console-setup/cached_*
+  if [ "$INTERACTIVE" = True ]; then
+    dpkg-reconfigure keyboard-configuration
+  else
+    KEYMAP="$1"
+    sed -i /etc/default/keyboard -e "s/^XKBLAYOUT.*/XKBLAYOUT=\"$KEYMAP\"/"
+    dpkg-reconfigure -f noninteractive keyboard-configuration
+  fi
+  if [ "$INIT" = "systemd" ]; then
+    systemctl restart keyboard-setup
+  fi
+  setsid sh -c 'exec setupcon --save -k --force <> /dev/tty1 >&0 2>&1'
+  udevadm trigger --subsystem-match=input --action=change
+  return 0
+}
+
+get_hostname() {
+  tr -d " \t\n\r" < /etc/hostname
+}
+
+do_hostname() {
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "\
+Please note: RFCs mandate that a hostname's labels \
+may contain only the ASCII letters 'a' through 'z' (case-insensitive),
+the digits '0' through '9', and the hyphen.
+Hostname labels cannot begin or end with a hyphen.
+No other symbols, punctuation characters, or blank spaces are permitted.\
+" 20 70 1
+  fi
+  CURRENT_HOSTNAME=$(get_hostname)
+  if [ "$INTERACTIVE" = True ]; then
+    NEW_HOSTNAME=$(whiptail --inputbox "Please enter a hostname" 20 60 "$CURRENT_HOSTNAME" 3>&1 1>&2 2>&3)
+  else
+    NEW_HOSTNAME="$1"
+    true
+  fi
+  if [ $? -eq 0 ]; then
+    if [ "$INIT" = "systemd" ] && systemctl -q is-active dbus && ! ischroot; then
+      hostnamectl set-hostname "$NEW_HOSTNAME" 2> /dev/null
+    else
+      echo "$NEW_HOSTNAME" > /etc/hostname
+    fi
+    sed -i "s/127\.0\.1\.1.*$CURRENT_HOSTNAME/127.0.1.1\t$NEW_HOSTNAME/g" /etc/hosts
+    ASK_TO_REBOOT=1
+  fi
+}
+
+list_wlan_interfaces() {
+  for dir in /sys/class/net/*/wireless; do
+    if [ -d "$dir" ]; then
+      IFACE="$(basename "$(dirname "$dir")")"
+      if wpa_cli -i "$IFACE" status > /dev/null 2>&1; then
+        echo "$IFACE"
+      fi
+    fi
+  done
+}
+
+do_wifi_ssid_passphrase() {
+  RET=0
+
+  if systemctl -q is-active dhcpcd; then
+    IFACE="$(list_wlan_interfaces | head -n 1)"
+
+    if [ -z "$IFACE" ]; then
+      if [ "$INTERACTIVE" = True ]; then
+        whiptail --msgbox "No wireless interface found" 20 60
+      fi
+      return 1
+    fi
+
+    if ! wpa_cli -i "$IFACE" status > /dev/null 2>&1; then
+      if [ "$INTERACTIVE" = True ]; then
+        whiptail --msgbox "Could not communicate with wpa_supplicant" 20 60
+      fi
+      return 1
+    fi
+  elif ! systemctl -q is-active NetworkManager; then
+    if [ "$INTERACTIVE" = True ]; then
+        whiptail --msgbox "No supported network connection manager found" 20 60
+      fi
+      return 1
+  fi
+
+  SSID="$1"
+  while [ -z "$SSID" ] && [ "$INTERACTIVE" = True ]; do
+    if ! SSID=$(whiptail --inputbox "Please enter SSID" 20 60 3>&1 1>&2 2>&3); then
+      return 0
+    elif [ -z "$SSID" ]; then
+      whiptail --msgbox "SSID cannot be empty. Please try again." 20 60
+    fi
+  done
+
+  PASSPHRASE="$2"
+  while [ "$INTERACTIVE" = True ]; do
+    if ! PASSPHRASE=$(whiptail --passwordbox "Please enter passphrase. Leave it empty if none." 20 60 3>&1 1>&2 2>&3); then
+      return 0
+    else
+      break
+    fi
+  done
+
+  # Escape special characters for embedding in regex below
+  ssid="$(echo "$SSID" \
+   | sed 's;\\;\\\\;g' \
+   | sed -e 's;\.;\\\.;g' \
+         -e 's;\*;\\\*;g' \
+         -e 's;\+;\\\+;g' \
+         -e 's;\?;\\\?;g' \
+         -e 's;\^;\\\^;g' \
+         -e 's;\$;\\\$;g' \
+         -e 's;\/;\\\/;g' \
+         -e 's;\[;\\\[;g' \
+         -e 's;\];\\\];g' \
+         -e 's;{;\\{;g'   \
+         -e 's;};\\};g'   \
+         -e 's;(;\\(;g'   \
+         -e 's;);\\);g'   \
+         -e 's;";\\\\\";g')"
+
+  HIDDEN=${3:-0}
+  PLAIN=${4:-1}
+
+  if systemctl -q is-active dhcpcd; then
+    wpa_cli -i "$IFACE" list_networks \
+     | tail -n +2 | cut -f -2 | grep -P "\t$ssid$" | cut -f1 \
+     | while read -r ID; do
+      wpa_cli -i "$IFACE" remove_network "$ID" > /dev/null 2>&1
+    done
+
+    ID="$(wpa_cli -i "$IFACE" add_network)"
+    wpa_cli -i "$IFACE" set_network "$ID" ssid "\"$SSID\"" 2>&1 | grep -q "OK"
+    RET=$((RET + $?))
+
+    if [ -z "$PASSPHRASE" ]; then
+      wpa_cli -i "$IFACE" set_network "$ID" key_mgmt NONE 2>&1 | grep -q "OK"
+      RET=$((RET + $?))
+    else
+      if [ "$PLAIN" = 1 ]; then
+        PASSPHRASE="\"$PASSPHRASE\""
+      fi
+      wpa_cli -i "$IFACE" set_network "$ID" psk "$PASSPHRASE" 2>&1 | grep -q "OK"
+      RET=$((RET + $?))
+    fi
+    if [ "$HIDDEN" -ne 0 ]; then
+      wpa_cli -i "$IFACE" set_network "$ID" scan_ssid 1 2>&1 | grep -q "OK"
+      RET=$((RET + $?))
+    fi
+    if [ $RET -eq 0 ]; then
+      wpa_cli -i "$IFACE" enable_network "$ID" > /dev/null 2>&1
+    else
+      wpa_cli -i "$IFACE" remove_network "$ID" > /dev/null 2>&1
+      if [ "$INTERACTIVE" = True ]; then
+        whiptail --msgbox "Failed to set SSID or passphrase" 20 60
+      fi
+    fi
+    wpa_cli -i "$IFACE" save_config > /dev/null 2>&1
+    echo "$IFACE_LIST" | while read -r IFACE; do
+      wpa_cli -i "$IFACE" reconfigure > /dev/null 2>&1
+    done
+  else
+    if [ "$HIDDEN" -ne 0 ]; then
+      nmcli device wifi connect "$SSID"  password "$PASSPHRASE" hidden true | grep -q "activated"
+    else
+      nmcli device wifi connect "$SSID"  password "$PASSPHRASE" | grep -q "activated"
+    fi
+    RET=$((RET + $?))
+  fi
+
+  return "$RET"
+}
+
+
+do_boot_behaviour() {
+  if [ "$INTERACTIVE" = True ]; then
+    BOOTOPT=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Boot Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+      "B1 Console" "Text console, requiring user to login" \
+      "B2 Console Autologin" "Text console, automatically logged in as '$USER' user" \
+      "B3 Desktop" "Desktop GUI, requiring user to login" \
+      "B4 Desktop Autologin" "Desktop GUI, automatically logged in as '$USER' user" \
+      3>&1 1>&2 2>&3)
+  else
+    BOOTOPT=$1
+    true
+  fi
+  if [ $? -eq 0 ]; then
+    case "$BOOTOPT" in # Handle default target
+      B1*|B2*) # Console
+        systemctl --quiet set-default multi-user.target
+        ;;
+      B3*|B4*) # Desktop
+        if [ -e /etc/init.d/lightdm ]; then
+          systemctl --quiet set-default graphical.target
         else
-            warn_box "undefined fdt node status !"
+          whiptail --msgbox "Do 'sudo apt-get install lightdm' to allow configuration of boot to desktop" 20 60 2
+          return 1
         fi
-        apply_status ${dtb_name} ${peri_select} ${confstate}
+        ;;
+      *)
+        whiptail --msgbox "Programmer error, unrecognised boot option" 20 60 2
+        return 1
+        ;;
+    esac
+    case "$BOOTOPT" in # Handle autologin
+      B1*|B3*) # Autologin disabled
+        if [ -z "${BOOTOPT%%B3*}" ]; then
+          sed /etc/lightdm/lightdm.conf.d/22-hobot-autologin.conf -i -e "s/^autologin-user=.*/#autologin-user=/"
+        fi
+        ;;
+      B2*|B4*) # Autologin enabled
+        if [ -z "${BOOTOPT%%B4*}" ]; then
+          sed /etc/lightdm/lightdm.conf.d/22-hobot-autologin.conf -i -e "s/^\(#\|\)autologin-user=.*/autologin-user=$USER/"
+        fi
+        ;;
+    esac
+    if [ "$INIT" = "systemd" ]; then
+      systemctl daemon-reload
+    fi
+    ASK_TO_REBOOT=1
+  fi
+}
+
+
+get_leds () {
+  if [ ! -e /sys/class/leds/ACT/trigger ] ; then
+    echo -1
+  elif grep -q "\\[heartbeat\\]" /sys/class/leds/ACT/trigger ; then
+    echo 0
+  elif grep -q "\\[default-on\\]" /sys/class/leds/ACT/trigger ; then
+    echo 1
+  else
+    echo -1
+  fi
+}
+
+do_leds() {
+  CURRENT=$(get_leds)
+  if [ $CURRENT -eq -1 ] ; then
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "The LED behaviour cannot be changed on this model of RDK" 20 60 1
+    fi
+    return 1
+  fi
+  DEFAULT=--defaultno
+  if [ $CURRENT -eq 0 ]; then
+    DEFAULT=
+  fi
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --yesno "Would you like the power LED to flash with heartbeat?" $DEFAULT 20 60 2
+    RET=$?
+  else
+    RET=$1
+  fi
+  if [ $RET -eq 0 ]; then
+    LEDSET="heartbeat"
+    STATUS="flash with heartbeat"
+  elif [ $RET -eq 1 ]; then
+    LEDSET="default-on"
+    STATUS="be on constantly"
+  else
+    return $RET
+  fi
+  sed $CONFIG -i -e "s/dtparam=act_led_trigger=.*/dtparam=act_led_trigger=$LEDSET/"
+  if ! grep -q "dtparam=act_led_trigger" $CONFIG ; then
+    sed $CONFIG -i -e "\$adtparam=act_led_trigger=$LEDSET"
+  fi
+  echo $LEDSET | tee /sys/class/leds/ACT/trigger > /dev/null
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "The power LED will $STATUS" 20 60 1
+  fi
+}
+
+
+get_browser() {
+  echo $(update-alternatives --display x-www-browser | grep currently | cut -d " " -f 7 | cut -d / -f 4)
+}
+
+do_browser() {
+  if [ "$INTERACTIVE" = True ]; then
+    RES=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Select Browser" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+      "1" "Chromium" \
+      "2" "Firefox" \
+      3>&1 1>&2 2>&3)
+  else
+    RES=""
+    BROWSER=$1
+    true
+  fi
+  if [ $? -eq 0 ]; then
+    if [ "$RES" = "1" ] ; then
+      BROWSER="chromium-browser"
+      BSTRING="Chromium"
+    elif [ "$RES" = "2" ] ; then
+      BROWSER="firefox"
+      BSTRING="Firefox"
+    fi
+    update-alternatives --set x-www-browser /usr/bin/$BROWSER > /dev/null
+    if [ -z $2 ] ; then
+      sudo -u $USER xdg-settings set default-web-browser $BROWSER.desktop
+    else
+      sudo -u $2 xdg-settings set default-web-browser $BROWSER.desktop
+    fi
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "Default browser set to $BSTRING" 20 60 1
+    fi
+  fi
+}
+
+get_vnc_resolution() {
+  if [ -e /etc/xdg/autostart/vnc_xrandr.desktop ] ; then
+    grep fb /etc/xdg/autostart/vnc_xrandr.desktop | cut -f 15 -d ' '
+  else
+    echo ""
+  fi
+}
+
+do_vnc_resolution() {
+  if [ "$INTERACTIVE" = True ]; then
+    CUR=$(get_vnc_resolution)
+    if [ "$CUR" = "" ] ; then
+      CUR=640x480
+    fi
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item $CUR --menu "Set VNC Resolution" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "640x480" "" "720x480" "" "800x600" "" "1024x768" "" "1280x720" "" "1280x1024" "" "1600x1200" "" "1920x1080" "" 3>&1 1>&2 2>&3)
+    RET=$?
+  else
+    FUN=$1
+    RET=0
+  fi
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    cat > /etc/xdg/autostart/vnc_xrandr.desktop << EOF
+[Desktop Entry]
+Type=Application
+Name=vnc_xrandr
+Comment=Set resolution for VNC
+NoDisplay=true
+Exec=sh -c "if ! (xrandr | grep -q -w connected) ; then /usr/bin/xrandr --fb $FUN ; fi"
+EOF
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "The resolution is set to $FUN" 20 60 1
+      ASK_TO_REBOOT=1
+    fi
+  fi
+}
+
+get_ssh() {
+  if service ssh status | grep -q inactive; then
+    echo 1
+  else
+    echo 0
+  fi
+}
+
+do_ssh() {
+  if [ -e /var/log/regen_ssh_keys.log ] && ! grep -q "^finished" /var/log/regen_ssh_keys.log; then
+    whiptail --msgbox "Initial ssh key generation still running. Please wait and try again." 20 60 2
+    return 1
+  fi
+  DEFAULT=--defaultno
+  if [ $(get_ssh) -eq 0 ]; then
+    DEFAULT=
+  fi
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --yesno \
+      "Would you like the SSH server to be enabled?\n\nCaution: Default and weak passwords are a security risk when SSH is enabled!" \
+      $DEFAULT 20 60 2
+    RET=$?
+  else
+    RET=$1
+  fi
+  if [ $RET -eq 0 ]; then
+    ssh-keygen -A &&
+    update-rc.d ssh enable &&
+    invoke-rc.d ssh start &&
+    STATUS=enabled
+  elif [ $RET -eq 1 ]; then
+    update-rc.d ssh disable &&
+    invoke-rc.d ssh stop &&
+    STATUS=disabled
+  else
+    return $RET
+  fi
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "The SSH server is $STATUS" 20 60 1
+  fi
+}
+
+get_vnc() {
+  if systemctl status x11vnc.service  | grep -q -w active; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+
+do_vnc() {
+  DEFAULT=--defaultno
+  if [ $(get_vnc) -eq 0 ]; then
+    DEFAULT=
+  fi
+  APT_GET_FLAGS=""
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --yesno "Would you like the VNC Server to be enabled?" $DEFAULT 20 60 2
+    RET=$?
+  else
+    RET=$1
+    APT_GET_FLAGS="-y"
+  fi
+  if [ $RET -eq 0 ]; then
+    if is_installed x11vnc; then
+      systemctl disable x11vnc.service
+      systemctl stop x11vnc.service
+    fi
+
+    if is_installed x11vnc || apt-get install "$APT_GET_FLAGS" x11vnc; then
+      systemctl enable x11vnc.service &&
+      systemctl start x11vnc.service &&
+      STATUS=enabled
+    else
+      return 1
+    fi
+  elif [ $RET -eq 1 ]; then
+    if is_installed x11vnc; then
+      systemctl disable x11vnc.service
+      systemctl stop x11vnc.service
+    fi
+    STATUS=disabled
+  else
+    return $RET
+  fi
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "The VNC Server is $STATUS" 20 60 1
+  fi
+}
+
+warn_box() {
+  text="$1"
+  return $(whiptail --title "WARNNING" --msgbox "$text" 20 60 1)
+}
+
+update_status() {
+  local dtb_name=$1
+  local options=()
+  local confstate=
+  for peri in ${!peri_status[@]}
+  do
+    status=`fdtget -t s ${dtb_name} ${peri} status 2> /dev/null`
+    if [ ! -z $status ];then
+      peri_status[${peri}]="$status"
+    fi
+    options+=("$peri" "                     ${peri_status[$peri]}")
+  done
+  peri_select=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" \
+    --menu "Peripherals bus config" \
+    $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+    --cancel-button Back \
+    --ok-button Select \
+    "${options[@]}" \
+    3>&1 1>&2 2>&3)
+  ret=$?
+  if [ $ret -ne 0 ];then 
+    return 1 
+  fi
+  unset options
+  # echo peri_select=$peri_select
+  # echo peri_status=${peri_status[$peri_select]}
+  peri_ops ${dtb_name} $peri_select ${peri_status[$peri_select]}
+  ret=$?
+  if [ $ret -eq "0" ];then
+    if [ "x${peri_status[$peri_select]}" == x"okay" ];then
+      confstate="disabled"
+    elif [ "x${peri_status[$peri_select]}" == x"disabled" ];then
+      confstate="okay"
+    else
+      warn_box "undefined fdt node status !"
+    fi
+    apply_status ${dtb_name} ${peri_select} ${confstate}
+    ret=$?
+    if [ $ret -ne "0" ];then
+      warn_box "fdtput get some err: ${options} ${peri_select} !"
+    fi
+    unset confstate
+  fi
+}
+
+apply_status() {
+  local dtb_name=$1
+  local peri=$2
+  local status=$3
+  local array=${conf_peris[$peri]}
+  local confstate="disabled"
+  array=${array//,/ }
+  if [ "x${status}" == x"okay" ];then
+    confstate="disabled"
+  elif [ "x${status}" == x"disabled" ];then
+    :
+  else
+    warn_box "undefined fdt node status !"
+  fi
+  for cp in "${array}"
+  do
+    fdtput -t s ${dtb_name} ${cp} status ${confstate} 2> /dev/null
+  done
+  apply_state="true"
+  return $(fdtput -t s ${dtb_name} ${peri} status ${status} 2> /dev/null)
+}
+
+peri_ops() {
+  local dtb_name=$1
+  local peri=$2
+  local status=$3
+  local options=()
+  local string=()
+  local somep="false"
+  local cperis=
+  if [ "x${status}" == x"okay" ];then
+    options=("dis")
+  else
+    options=("en")
+  fi
+  if [ ! -z "${conf_peris[$peri]}" ];then
+    peris=${conf_peris[$peri]}
+    for cperi in ${peris//,/ }
+    do
+      if [ x${peri_status[$cperi]} == x"okay" ];then
+        somep="true"
+        cperis="${cperis} ${cperi}"
+      fi
+    done
+    if [ x${somep} == x"true" ];then
+      string=("Doing this and the ${cperis[@]} will be disabled")
+    else
+      string=("")
+    fi
+  else
+    string=("")
+  fi
+  whiptail --title "Your select" \
+    --yesno "Are you sure want to ${options}able $peri? \
+    \n${string}" \
+    20 60 \
+    3>&1 1>&2 2>&3
+  ret=$?
+  if [ $ret -eq 0 ];then
+    for cperi in ${peris//,/ }
+    do
+      if [ x${peri_status[$cperi]} == x"okay" ];then
+        apply_status ${dtb_name} $cperi "disabled"
         ret=$?
         if [ $ret -ne "0" ];then
-            warn_box "fdtput get some err: ${options} ${peri_select} !"
+          warn_box "fdtput get some err: $options $cperi !"
+          return ret
         fi
-        unset confstate
-    fi
-}
-
-function apply_status() {
-    local dtb_name=$1
-    local peri=$2
-    local status=$3
-    local array=${conf_peris[$peri]}
-    local confstate="disabled"
-    array=${array//,/ }
-    if [ "x${status}" == x"okay" ];then
-        confstate="disabled"
-    elif [ "x${status}" == x"disabled" ];then
-        :
-    else
-        warn_box "undefined fdt node status !"
-    fi
-    for cp in "${array}"
-    do
-        fdtput -t s ${dtb_name} ${cp} status ${confstate} 2> /dev/null
+      fi
     done
-    apply_state="true"
-    return $(fdtput -t s ${dtb_name} ${peri} status ${status} 2> /dev/null)
+  fi
+  return $ret
 }
 
-function peri_ops() {
-    local dtb_name=$1
-    local peri=$2
-    local status=$3
-    local options=()
-    local string=()
-    local somep="false"
-    local cperis=
-    if [ "x${status}" == x"okay" ];then
-        options=("dis")
+do_peripheral() {
+  board_id=$(cat /sys/class/socinfo/board_id)
+  board_type=$((0x$board_id & 0xfff))
+  hex_btype=$(printf "0x%x" $board_type)
+
+  rootsource=$(findmnt -n -o SOURCE / | sed 's~\[.*\]~~')
+  rootdevice=$(echo $rootsource | sed -e "s/^\/dev\///")
+  rootpartnum=${rootdevice##mmc*p}
+  if [ $rootpartnum -gt 2 ];then
+      case $hex_btype in
+      "0x104"|"0x304")
+          config="/etc/hobot.conf/sdbv3.conf"
+          ;;
+      "0x404")
+          config="/etc/hobot.conf/sdbv4.conf"
+          ;;
+      *)
+          echo "Unsupport board type!!"
+          exit -1
+          ;;
+      esac
+      partnum=`parted /dev/mmcblk0 print -sm | grep ":boot" | awk -F ':' '{print $1}'`
+      partdev="/dev/mmcblk0p${partnum}"
+      bootfile="/tmp/boot.img"
+      dd if=${partdev} of=${bootfile} bs=1M count=10 > /dev/null
+      ret=$?
+      if [[ $ret -ne 0 ]] || [[ ! -f ${bootfile} ]];then
+          echo "dd is failed or ${bootfile} is not exist!"
+          exit -1
+      fi
+      dtb_name=`hb_dtb_tool -i ${bootfile} -b ${board_type} -g|grep dtb_name |awk '{print $2}'`
+      if [ ! -n $dtb_name ];then
+      echo "hb_dtb_tool get ${board_type} failed!"
+      exit -1
+      fi
+  elif [ $rootpartnum -eq 1 ] || [ $rootpartnum -eq 2 ];then
+      if [ -d "/boot/hobot" ];then
+          config="/etc/hobot.conf/x3pi.conf"
+          case $hex_btype in
+          "0x101"|"0x102")
+              dtb_name="hobot-x3-dvb.dtb"
+              ;;
+          "0x103"|"0x203")
+              dtb_name="hobot-xj3-cvb.dtb"
+              ;;
+          "0x104"|"0x304")
+              dtb_name="hobot-x3-sdb.dtb"
+              ;;
+          "0x404")
+              dtb_name="hobot-x3-sdb_v4.dtb"
+              ;;
+          "0x504")
+              dtb_name="hobot-x3-pi.dtb"
+              ;;
+          "0x604")
+              dtb_name="hobot-x3-pi.dtb"
+              ;;
+          "0x804")
+              dtb_name="hobot-x3-pi_v2_1.dtb"
+              ;;
+          "0xb04")
+              config="/etc/hobot.conf/x3cm.conf"
+              dtb_name="hobot-x3-cm.dtb"
+              ;;
+          *)
+              echo "Unsupport board type!!"
+              exit -1
+              ;;
+          esac
+          if [ -f "/boot/hobot/${dtb_name}" ];then
+              cp "/boot/hobot/${dtb_name}" ${dtb_name}
+          else
+              echo "Dtb file not exist!!"
+              exit -1
+          fi
+      fi
+  fi
+  if [ -z $dtb_name ];then
+      echo "No dtb file find!!"
+      exit -1
+  fi
+
+  if [ ! -f $config ];then
+    echo "file ${config} is not exist!"
+    exit -1
+  fi
+
+  declare -A peri_status
+  declare -A conf_peris
+
+  apply_state="false"
+
+  for line in $(cat $config)
+  do
+      arr=(${line//:/ })
+      peri=${arr[0]}
+      peri_status[$peri]="unkowned"
+      conf_peris[$peri]=${arr[1]}
+  done
+
+  while true; do
+      update_status $dtb_name
+      ret=$?
+      if [ $ret -ne 0 ];then
+          break
+      fi
+  done
+
+  if [ $rootpartnum -gt 2 ];then
+      if [ x${apply_state} == x"true" ];then
+          hb_dtb_tool -i ${bootfile} -b ${board_type} -s $dtb_name
+          ret=$?
+          if [ $ret -ne 0 ];then
+              echo "hb_dtb_tool -s is failed!"
+              exit -1
+          fi
+          dd if=${bootfile} of=${partdev}  > /dev/null
+          ret=$?
+          if [ $ret -ne 0 ];then
+              echo "dd is failed!"
+              exit -1
+          fi
+          ASK_TO_REBOOT=1
+          sync
+      fi
+  elif [ $rootpartnum -eq 1 ] || [ $rootpartnum -eq 2 ];then
+      if [ x${apply_state} == x"true" ];then
+          cp ${dtb_name} "/boot/hobot/${dtb_name}"
+          ASK_TO_REBOOT=1
+      fi
+  fi
+  rm -rf $dtb_name ${bootfile}
+}
+
+get_cpu_boost() {
+  boost=$(tr -d " \t\n\r" < /sys/devices/system/cpu/cpufreq/boost)
+  if [ "${boost}" = "0" ]; then
+    echo 0
+  else
+    echo 1
+  fi
+}
+
+do_cpu_boost() {
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "\
+Be aware that overclocking may reduce the lifetime of your
+RDK. If overclocking at a certain level causes
+system instability, try a more modest overclock.\
+" 20 70 1
+  fi
+
+  DEFAULT=--defaultno
+  if [ $(get_cpu_boost) -eq 0 ]; then
+    DEFAULT=
+  fi
+
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --yesno \
+      "Would you like the CPU boost to be enabled?" \
+      $DEFAULT 20 60 2
+    RET=$?
+  else
+    RET=$1
+  fi
+  if [ $RET -eq 0 ]; then
+    set_config_var arm_boost 1 ${CONFIG}
+    echo 1 > /sys/devices/system/cpu/cpufreq/boost
+    STATUS=enabled
+  elif [ $RET -eq 1 ]; then
+    set_config_var arm_boost 0 ${CONFIG}
+    echo 0 > /sys/devices/system/cpu/cpufreq/boost
+    STATUS=disabled
+  else
+    return $RET
+  fi
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "The CPU boost is $STATUS" 20 60 1
+    ASK_TO_REBOOT=1
+  fi
+}
+
+get_cpu_governor() {
+  if [ -e /sys/devices/system/cpu/cpufreq/policy0/scaling_governor ] ; then
+    tr -d " \t\n\r" < /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+  else
+    echo ""
+  fi
+}
+
+do_cpu_governor() {
+  if [ "$INTERACTIVE" = True ]; then
+    CUR=$(get_cpu_governor)
+    if [ "$CUR" = "" ] ; then
+      CUR=performance
+    fi
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" \
+      --default-item $CUR --menu "Set CPU governor" \
+      $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "conservative" "" "ondemand" "" "userspace" "" "powersave" "" "performance" "" "schedutil" "" 3>&1 1>&2 2>&3)
+    RET=$?
+  else
+    FUN=$1
+    RET=0
+  fi
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    set_config_var governor $FUN ${CONFIG}
+    echo $FUN > /sys/devices/system/cpu/cpufreq/policy0/scaling_governor
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "The cpu governor is set to $FUN" 20 60 1
+      ASK_TO_REBOOT=1
+    fi
+  fi
+}
+
+get_cpu_frequency() {
+  if [ -e /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq ] ; then
+    tr -d " \t\n\r" < /sys/devices/system/cpu/cpufreq/policy0/scaling_cur_freq
+  else
+    echo ""
+  fi
+}
+
+do_cpu_frequency() {
+  if [ $(get_cpu_governor) != "userspace" ]; then
+    whiptail --msgbox "The cpu frequency can only be set when the governor is set to userspace" 20 60 2
+    return 0
+  fi
+  if [ "$INTERACTIVE" = True ]; then
+    CUR=$(get_cpu_frequency)
+    if [ "$CUR" = "" ] ; then
+      CUR=1200000
+    fi
+
+    available_frequencies=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_available_frequencies | tr -d "\t\n\r\0" | sed 's/ / '[normal]' /g')
+    if [ $(get_cpu_boost) -eq 1 ]; then
+      boost_frequencies=$(cat /sys/devices/system/cpu/cpufreq/policy0/scaling_boost_frequencies | tr -d "\t\n\r\0" | sed 's/ / [boost] /g')
+      available_frequencies="$available_frequencies $boost_frequencies"
+    fi
+
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" \
+      --default-item $CUR --menu "Set CPU frequency" \
+      $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      ${available_frequencies} 3>&1 1>&2 2>&3)
+    RET=$?
+  else
+    FUN=$1
+    RET=0
+  fi
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    set_config_var frequency $FUN ${CONFIG}
+    echo $FUN > /sys/devices/system/cpu/cpufreq/policy0/scaling_setspeed
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "The cpu frequency is set to $FUN" 20 60 1
+      ASK_TO_REBOOT=1
+    fi
+  fi
+}
+
+do_cpu_frequency_menu() {
+  FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" \
+      --menu "Configure CPU frequency" \
+      $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "C1 CPU Boost" "Configure CPU overclocking" \
+      "C2 CPU Governor" "Configure the CPU frequency governor mode" \
+      "C3 CPU Frequency" "Configure the CPU to run at a fixed frequency (only Governor = userspace)" \
+      3>&1 1>&2 2>&3)
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      C1\ *) do_cpu_boost ;;
+      C2\ *) do_cpu_governor ;;
+      C3\ *) do_cpu_frequency ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_expand_rootfs() {
+  rm -f /etc/.do_expand_partiton /etc/.do_resizefs_rootfs
+  /etc/init.d/hobot-resizefs start
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "Root partition has been resized" 20 60 1
+  fi
+}
+
+get_proxy() {
+  SCHEME="$1"
+  VAR_NAME="${SCHEME}_proxy"
+  if [ -f /etc/profile.d/proxy.sh ]; then
+    # shellcheck disable=SC1091
+    . /etc/profile.d/proxy.sh
+  fi
+  eval "echo \$$VAR_NAME"
+}
+
+do_proxy() {
+  SCHEMES="$1"
+  ADDRESS="$2"
+  if [ "$SCHEMES" = "all" ]; then
+    CURRENT="$(get_proxy http)"
+    SCHEMES="http https ftp rsync"
+  else
+    CURRENT="$(get_proxy "$SCHEMES")"
+  fi
+  if [ "$INTERACTIVE" = True ]; then
+    if [ "$SCHEMES" = "no" ]; then
+      STRING="Please enter a comma separated list of addresses that should be excluded from using proxy servers.\\nEg: localhost,127.0.0.1,localaddress,.localdomain.com"
     else
-        options=("en")
+      STRING="Please enter proxy address.\\nEg: http://user:pass@proxy:8080"
     fi
-    if [ ! -z "${conf_peris[$peri]}" ];then
-        peris=${conf_peris[$peri]}
-        for cperi in ${peris//,/ }
-        do
-            if [ x${peri_status[$cperi]} == x"okay" ];then
-                somep="true"
-                cperis="${cperis} ${cperi}"
-            fi
-        done
-        if [ x${somep} == x"true" ];then
-            string=("Doing this and the ${cperis[@]} will be disabled")
-        else
-            string=("")
-        fi
-    else
-        string=("")
+    if ! ADDRESS="$(whiptail --inputbox "$STRING"  20 60 "$CURRENT" 3>&1 1>&2 2>&3)"; then
+      return 0
     fi
-    whiptail --title "Your select" \
-                --yesno "Are you sure want to ${options}able $peri? \
-                \n${string}" \
-                10 $((TTY_X - 80)) \
-                3>&1 1>&2 2>&3
-    ret=$?
-    if [ $ret -eq 0 ];then
-        for cperi in ${peris//,/ }
-        do
-            if [ x${peri_status[$cperi]} == x"okay" ];then
-                apply_status ${dtb_name} $cperi "disabled"
-                ret=$?
-                if [ $ret -ne "0" ];then
-                    warn_box "fdtput get some err: $options $cperi !"
-                    return ret
-                fi
-            fi
-        done
+  fi
+  for SCHEME in $SCHEMES; do
+    unset "${SCHEME}_proxy"
+    CURRENT="$(get_proxy "$SCHEME")"
+    if [ "$CURRENT" != "$ADDRESS" ]; then
+      ASK_TO_REBOOT=1
     fi
-    return $ret
-} 
+    if [ -f /etc/profile.d/proxy.sh ]; then
+      sed -i "/^export ${SCHEME}_/Id" /etc/profile.d/proxy.sh
+    fi
+    if [ "${SCHEME#*http}" != "$SCHEME" ]; then
+      if [ -f /etc/apt/apt.conf.d/01proxy ]; then
+        sed -i "/::${SCHEME}::Proxy/d" /etc/apt/apt.conf.d/01proxy
+      fi
+    fi
+    if [ -z "$ADDRESS" ]; then
+      STATUS=cleared
+      continue
+    fi
+    STATUS=updated
+    SCHEME_UPPER="$(echo "$SCHEME" | tr '[:lower:]' '[:upper:]')"
+    echo "export ${SCHEME_UPPER}_PROXY=\"$ADDRESS\"" >> /etc/profile.d/proxy.sh
+    if [ "$SCHEME" != "rsync" ]; then
+      echo "export ${SCHEME}_proxy=\"$ADDRESS\"" >> /etc/profile.d/proxy.sh
+    fi
+    if [ "${SCHEME#*http}" != "$SCHEME" ]; then
+      echo "Acquire::$SCHEME::Proxy \"$ADDRESS\";"  >> /etc/apt/apt.conf.d/01proxy
+    fi
+  done
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --msgbox "Proxy settings $STATUS" 20 60 1
+  fi
+}
 
-path=`pwd`
-TTY_X=$(($(stty size | awk '{print $2}')-6)) 
-TTY_Y=$(($(stty size | awk '{print $1}')-6))
-
-which whiptail > /dev/null
-ret=$?
-if [ $ret -ne 0 ];then
-    echo "Your terminal maybe too small to run $0"
-    exit -1
-fi
-
-if [ $((TTY_Y - 8)) -lt 1 ];then
-    echo "Your terminal maybe too small to run $0"
-    exit -1
-fi
-
-board_id=$(cat /sys/class/socinfo/board_id)
-board_type=$((0x$board_id & 0xfff))
-hex_btype=$(printf "0x%x" $board_type)
-
-rootsource=$(findmnt -n -o SOURCE / | sed 's~\[.*\]~~')
-rootdevice=$(echo $rootsource | sed -e "s/^\/dev\///")
-rootpartnum=${rootdevice##mmc*p}
-if [ $rootpartnum -gt 2 ];then
-    case $hex_btype in
-    "0x104"|"0x304")
-        config="/etc/hobot.conf/sdbv3.conf"
+do_boot_order() {
+  if [ "$INTERACTIVE" = True ]; then
+    BOOTOPT=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Boot Device Order" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT \
+      "B1 SD Card Boot" "Boot from SD Card if available, otherwise boot from USB" \
+      "B2 EMMC Boot" "Boot from USB if available, otherwise boot from SD Card" \
+      3>&1 1>&2 2>&3)
+  else
+    BOOTOPT=$1
+    true
+  fi
+  if [ $? -eq 0 ]; then
+    case "$BOOTOPT" in
+      B1*)
+        parted /dev/mmcblk0 set 2 boot off
+        STATUS="SD Card"
         ;;
-    "0x404")
-        config="/etc/hobot.conf/sdbv4.conf"
+      B2*)
+        parted /dev/mmcblk0 set 2 boot on
+        STATUS="EMMC"
         ;;
-    *)
-        echo "Unsupport board type!!"
-        exit -1
+      *)
+        whiptail --msgbox "Programmer error, unrecognised boot option" 20 60 2
+        return 1
         ;;
-    esac    
-    partnum=`parted /dev/mmcblk0 print -sm | grep ":boot" | awk -F ':' '{print $1}'`
-    partdev="/dev/mmcblk0p${partnum}"
-    bootfile="/tmp/boot.img"
-    dd if=${partdev} of=${bootfile} bs=1M count=10 > /dev/null
-    ret=$?
-    if [[ $ret -ne 0 ]] || [[ ! -f ${bootfile} ]];then
-        echo "dd is failed or ${bootfile} is not exist!"
-        exit -1
+    esac
+    ASK_TO_REBOOT=1
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "$STATUS is default boot device" 20 60 1
     fi
-    dtb_name=`hb_dtb_tool -i ${bootfile} -b ${board_type} -g|grep dtb_name |awk '{print $2}'`
-    if [ ! -n $dtb_name ];then
-    echo "hb_dtb_tool get ${board_type} failed!"
-    exit -1
-    fi
-elif [ $rootpartnum -eq 1 ] || [ $rootpartnum -eq 2 ];then
-    if [ -d "/boot/hobot" ];then
-        config="/etc/hobot.conf/x3pi.conf"
-        case $hex_btype in
-        "0x101"|"0x102")
-            dtb_name="hobot-x3-dvb.dtb"
-            ;;
-        "0x103"|"0x203")
-            dtb_name="hobot-xj3-cvb.dtb"
-            ;;
-        "0x104"|"0x304")
-            dtb_name="hobot-x3-sdb.dtb"
-            ;;
-        "0x404")
-            dtb_name="hobot-x3-sdb_v4.dtb"
-            ;;
-        "0x504")
-            dtb_name="hobot-x3-pi.dtb"
-            ;;
-        "0x604")
-            dtb_name="hobot-x3-pi.dtb"
-            ;;
-        "0x804")
-            dtb_name="hobot-x3-pi_v2_1.dtb"
-            ;;
-        "0xb04")
-            config="/etc/hobot.conf/x3cm.conf"
-            dtb_name="hobot-x3-cm.dtb"
-            ;;
-        "0x201"|"0x202")
-            dtb_name="hobot-j3-dvb.dtb"
-            ;;
-        *)
-            echo "Unsupport board type!!"
-            exit -1
-            ;;
-        esac
-        if [ -f "/boot/hobot/${dtb_name}" ];then
-            cp "/boot/hobot/${dtb_name}" ${dtb_name}
-        else
-            echo "Dtb file not exist!!"
-            exit -1
-        fi
-    fi
-fi
-if [ -z $dtb_name ];then
-    echo "No dtb file find!!"
-    exit -1
-fi
-# echo dtb_name $dtb_name
-titlestr="Choose an option"
-backtitle="Verison v0.1"
-menustr="Peripheral Setup"
-declare -A peri_status
-declare -A conf_peris
+  fi
+}
 
-apply_state="false"
+do_update() {
+  apt-get update &&
+  apt-get install hobot-io &&
+  printf "Sleeping 5 seconds before reloading srpi-config\n" &&
+  sleep 5 &&
+  exec srpi-config
+}
 
-if [ ! -f $config ];then
-  echo "file ${config} is not exist!"
-  exit -1
+nonint() {
+  "$@"
+}
+
+# Needs to be run as root
+if [ $(id -u) -ne 0 ]; then
+  printf "Script must be run as root. Try 'sudo srpi-config'\n"
+  exit 1
 fi
 
-
-for line in $(cat $config)
+#
+# Command line options for non-interactive use
+#
+for i in $*
 do
-    arr=(${line//:/ })
-    peri=${arr[0]}
-    peri_status[$peri]="unkowned"
-    conf_peris[$peri]=${arr[1]}
+  case $i in
+  --expand-rootfs)
+    INTERACTIVE=False
+    rm -f /etc/.do_expand_partiton /etc/.do_resizefs_rootfs
+    /etc/init.d/hobot-resizefs start
+    exit 0
+    ;;
+  nonint)
+    INTERACTIVE=False
+    "$@"
+    exit $?
+    ;;
+  *)
+    # unknown option
+    ;;
+  esac
 done
 
-while true; do
-    update_status $dtb_name
-    ret=$?
-    if [ $ret -ne 0 ];then
-        break
-    fi
-done
+do_system_menu() {
+  FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "System Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+    "S1 Wireless LAN" "Enter SSID and passphrase" \
+    "S2 Password" "Change password for the '$USER' user" \
+    "S3 Hostname" "Set name for this computer on a network" \
+    "S4 Boot / Auto Login" "Select boot into desktop or to command line" \
+    "S5 Power LED" "Set behaviour of power LED" \
+    "S6 Browser" "Choose default web browser" \
+    3>&1 1>&2 2>&3)
 
-if [ $rootpartnum -gt 2 ];then
-    if [ x${apply_state} == x"true" ];then
-        hb_dtb_tool -i ${bootfile} -b ${board_type} -s $dtb_name
-        ret=$?
-        if [ $ret -ne 0 ];then
-            echo "hb_dtb_tool -s is failed!"
-            exit -1
-        fi
-        dd if=${bootfile} of=${partdev}  > /dev/null
-        ret=$?
-        if [ $ret -ne 0 ];then
-            echo "dd is failed!"
-            exit -1
-        fi
-        sync
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      S1\ *) do_wifi_ssid_passphrase ;;
+      S2\ *) do_change_pass ;;
+      S3\ *) do_hostname ;;
+      S4\ *) do_boot_behaviour ;;
+      S5\ *) do_leds ;;
+      S6\ *) do_browser ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_display_menu() {
+  FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Display Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+    "D1 VNC Resolution" "Set resolution for headless use" \
+    3>&1 1>&2 2>&3)
+
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      D1\ *) do_vnc_resolution ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_interface_menu() {
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Interfacing Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "I1 SSH" "Enable/disable remote command line access using SSH" \
+      "I2 VNC" "Enable/disable graphical remote desktop access" \
+      "I3 Peripheral bus config" "Enable/disable peripheral bus(spi,i2c,serial,i2s,etc.)" \
+      3>&1 1>&2 2>&3)
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      I1\ *) do_ssh ;;
+      I2\ *) do_vnc ;;
+      I3\ *) do_peripheral ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_performance_menu() {
+  FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Performance Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "P1 CPU frequency" "Configure CPU frequency" \
+      3>&1 1>&2 2>&3)
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      P1\ *) do_cpu_frequency_menu ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_internationalisation_menu() {
+  FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Localisation Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+    "L1 Locale" "Configure language and regional settings" \
+    "L2 Timezone" "Configure time zone" \
+    "L3 Keyboard" "Set keyboard layout to match your keyboard" \
+    3>&1 1>&2 2>&3)
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      L1\ *) do_change_locale ;;
+      L2\ *) do_change_timezone ;;
+      L3\ *) do_configure_keyboard ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_advanced_menu() {
+  if is_rdkmd ; then
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Advanced Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "A1 Expand Filesystem" "Ensures that all of the SD card is available" \
+      "A2 Network Proxy Settings" "Configure network proxy settings" \
+      "A3 Boot Order" "Choose network or USB device boot" \
+      3>&1 1>&2 2>&3)
+  else
+   FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Advanced Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "A1 Expand Filesystem" "Ensures that all of the SD card is available" \
+      "A2 Network Proxy Settings" "Configure network proxy settings" \
+      3>&1 1>&2 2>&3)
+  fi
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      A1\ *) do_expand_rootfs ;;
+      A2\ *) do_proxy_menu ;;
+      A3\ *) do_boot_order ;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_proxy_menu() {
+  FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Network Proxy Settings" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+    "P1 All" "Set the same proxy for all schemes" \
+    "P2 HTTP" "Set the HTTP proxy" \
+    "P3 HTTPS" "Set the HTTPS/SSL proxy" \
+    "P4 FTP" "Set the FTP proxy" \
+    "P5 RSYNC" "Set the RSYNC proxy" \
+    "P6 Exceptions" "Set addresses for which a proxy server should not be used" \
+    3>&1 1>&2 2>&3)
+  RET=$?
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    case "$FUN" in
+      P1\ *) do_proxy all ;;
+      P2\ *) do_proxy http ;;
+      P3\ *) do_proxy https ;;
+      P4\ *) do_proxy ftp ;;
+      P5\ *) do_proxy rsync ;;
+      P6\ *) do_proxy no;;
+      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+  fi
+}
+
+do_finish() {
+  if [ $ASK_TO_REBOOT -eq 1 ]; then
+    whiptail --yesno "Would you like to reboot now?" 20 60 2
+    if [ $? -eq 0 ]; then # yes
+      sync
+      reboot
     fi
-elif [ $rootpartnum -eq 1 ] || [ $rootpartnum -eq 2 ];then
-    if [ x${apply_state} == x"true" ];then
-        cp ${dtb_name} "/boot/hobot/${dtb_name}"
+  fi
+  exit 0
+}
+
+#
+# Interactive use loop
+#
+if [ "$INTERACTIVE" = True ]; then
+  [ -e $CONFIG ] || touch $CONFIG
+  calc_wt_size
+  while [ "$USER" = "root" ] || [ -z "$USER" ]; do
+    if ! USER=$(whiptail --inputbox "srpi-config could not determine the default user.\\n\\nWhat user should these settings apply to?" 20 60 pi 3>&1 1>&2 2>&3); then
+      return 0
     fi
+  done
+  backtitle=$(cat /proc/device-tree/model | tr -d '\0')
+  while true; do
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --backtitle "${backtitle}" --menu "Setup Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Finish --ok-button Select \
+      "1 System Options" "Configure system settings" \
+      "2 Display Options" "Configure display settings" \
+      "3 Interface Options" "Configure connections to peripherals" \
+      "4 Performance Options" "Configure performance settings" \
+      "5 Localisation Options" "Configure language and regional settings" \
+      "6 Advanced Options" "Configure advanced settings" \
+      "8 Update" "Update this tool to the latest version" \
+      "9 About srpi-config" "Information about this configuration tool" \
+      3>&1 1>&2 2>&3)
+    RET=$?
+    if [ $RET -eq 1 ]; then
+      do_finish
+    elif [ $RET -eq 0 ]; then
+      case "$FUN" in
+        1\ *) do_system_menu ;;
+        2\ *) do_display_menu ;;
+        3\ *) do_interface_menu ;;
+        4\ *) do_performance_menu ;;
+        5\ *) do_internationalisation_menu ;;
+        6\ *) do_advanced_menu ;;
+        8\ *) do_update ;;
+        9\ *) do_about ;;
+        *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
+      esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
+    else
+      exit 1
+    fi
+  done
 fi
-rm -rf $dtb_name ${bootfile}
-exit 0
+

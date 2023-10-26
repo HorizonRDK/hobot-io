@@ -1,6 +1,5 @@
 #!/bin/bash
 
-echo "Prerm running"
 which python3 > /dev/null
 if [ $? -ne 0 ];then
     echo -e "Please apt install python3 first and then reinstall this package!"
