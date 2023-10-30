@@ -610,6 +610,10 @@ do_vnc() {
     fi
 
     if is_installed x11vnc || apt-get install "$APT_GET_FLAGS" x11vnc; then
+      whiptail --msgbox "You will now be asked to enter a password for the VNC server" 20 60 1
+      mkdir -p /etc/.vnc
+      vncpasswd /etc/.vnc/passwd &&
+      whiptail --msgbox "Password setted successfully" 20 60 1
       systemctl enable x11vnc.service &&
       systemctl start x11vnc.service &&
       STATUS=enabled
