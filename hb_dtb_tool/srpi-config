@@ -160,6 +160,9 @@ is_uname_current() {
 do_change_locale() {
   if [ "$INTERACTIVE" = True ]; then
     dpkg-reconfigure locales
+    if [ $? -eq 0 ]; then
+      ASK_TO_REBOOT=1
+    fi
   else
     if ! LOCALE_LINE="$(grep -E "^$1( |$)" /usr/share/i18n/SUPPORTED)"; then
       return 1
