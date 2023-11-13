@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=RDK Configuration
+Exec=sudo srpi-config %F
+Terminal=true
+Categories=GTK;System;IDE;
