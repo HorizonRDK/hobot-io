@@ -1045,6 +1045,49 @@ do_cpu_frequency_menu() {
   fi
 }
 
+get_ion_memory ()
+{
+  if [ -e /proc/device-tree/reserved-memory/ion_cma/size ] ; then
+    ion_cma_size_hex=$(xxd -s 4 -l 4 -p /proc/device-tree/reserved-memory/ion_cma/size | tr -d " \t\n\r")
+    ion_cma_size_dec=$((16#${ion_cma_size_hex}))
+    ion_cma_size_mb=$((ion_cma_size_dec / (1024 * 1024)))
+    echo ${ion_cma_size_mb}"MB"
+  else
+    echo "672MB"
+  fi
+}
+
+do_config_ion_memory ()
+{
+  if [ "$INTERACTIVE" = True ]; then
+    CUR=$(get_ion_memory)
+    if [ "$CUR" = "" ] ; then
+      CUR=672MB
+    fi
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item $CUR --menu "Set VNC Resolution" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "512MB" "" "672MB" "" "768MB" "" "1024MB" "" "1280MB" "" "1536MB" "" "1664MB" "" "1700MB" "" "1900MB" "Only supported on 4GB memory models" 3>&1 1>&2 2>&3)
+    RET=$?
+  else
+    FUN=$1
+    RET=0
+  fi
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    ion_cma_size_mb=$(echo ${FUN} | sed 's/MB//')
+    ion_cma_size_hex=$(printf "0x%x" "$((ion_cma_size_mb * 1024 * 1024))")
+    if grep -q "dtoverlay=ion_resize,size=" "${CONFIG}" || grep -q "#dtoverlay=ion_resize,size=" "${CONFIG}"; then
+      sed -i "s/\(dtoverlay=ion_resize,size=\|#dtoverlay=ion_resize,size=\).*/dtoverlay=ion_resize,size=${ion_cma_size_hex}/" "${CONFIG}"
+    else
+      echo "dtoverlay=ion_resize,size=${ion_cma_size_hex}" >> "${CONFIG}"
+    fi
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "The ion memory is set to ${FUN}" 20 60 1
+      ASK_TO_REBOOT=1
+    fi
+  fi
+}
+
 do_expand_rootfs() {
   rm -f /etc/.do_expand_partiton /etc/.do_resizefs_rootfs
   /etc/init.d/hobot-resizefs start
@@ -1252,6 +1295,7 @@ do_interface_menu() {
 do_performance_menu() {
   FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Performance Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
       "P1 CPU frequency" "Configure CPU frequency" \
+      "P2 ION memory" "Configure ION memory size for BPU and multimedia" \
       3>&1 1>&2 2>&3)
   RET=$?
   if [ $RET -eq 1 ]; then
@@ -1259,6 +1303,7 @@ do_performance_menu() {
   elif [ $RET -eq 0 ]; then
     case "$FUN" in
       P1\ *) do_cpu_frequency_menu ;;
+      P2\ *) do_config_ion_memory ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   fi
