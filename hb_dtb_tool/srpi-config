@@ -895,6 +895,33 @@ do_peripheral() {
   rm -rf $dtb_name ${bootfile}
 }
 
+do_wifi_antenna()
+{
+  if [ "$INTERACTIVE" = True ]; then
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item "Onboard" --menu "Set VNC Resolution" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "Onboard" "" "External" ""  3>&1 1>&2 2>&3)
+    RET=$?
+  else
+    FUN=$1
+    RET=0
+  fi
+  if [ $RET -eq 1 ]; then
+    return 0
+  elif [ $RET -eq 0 ]; then
+    if [ "${FUN}" = "Onboard" ]; then
+      /bin/switch_antenna trace
+      set_config_var antenna_option trace ${CONFIG}
+    elif [ "${FUN}" = "External" ]; then
+      /bin/switch_antenna cable
+      set_config_var antenna_option cable ${CONFIG}
+    fi
+
+    if [ "$INTERACTIVE" = True ]; then
+      whiptail --msgbox "The Wi-Fi antenna is switch to ${FUN} antenna" 20 60 1
+    fi
+  fi
+}
+
 get_cpu_boost() {
   boost=$(tr -d " \t\n\r" < /sys/devices/system/cpu/cpufreq/boost)
   if [ "${boost}" = "0" ]; then
@@ -1274,11 +1301,20 @@ do_display_menu() {
 }
 
 do_interface_menu() {
+  if is_rdk2 ; then
+    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Interfacing Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+      "I1 SSH" "Enable/disable remote command line access using SSH" \
+      "I2 VNC" "Enable/disable graphical remote desktop access" \
+      "I3 Peripheral bus config" "Enable/disable peripheral bus(spi,i2c,serial,i2s,etc.)" \
+      "I4 Configure Wi-Fi antenna" "Configure Wi-Fi antennas to use onboard or external antenna" \
+      3>&1 1>&2 2>&3)
+  else
     FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Interfacing Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
       "I1 SSH" "Enable/disable remote command line access using SSH" \
       "I2 VNC" "Enable/disable graphical remote desktop access" \
       "I3 Peripheral bus config" "Enable/disable peripheral bus(spi,i2c,serial,i2s,etc.)" \
       3>&1 1>&2 2>&3)
+  fi
   RET=$?
   if [ $RET -eq 1 ]; then
     return 0
@@ -1287,6 +1323,7 @@ do_interface_menu() {
       I1\ *) do_ssh ;;
       I2\ *) do_vnc ;;
       I3\ *) do_peripheral ;;
+      I4\ *) do_wifi_antenna ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   fi
