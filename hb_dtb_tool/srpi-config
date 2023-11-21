@@ -486,7 +486,7 @@ do_browser() {
   fi
   if [ $? -eq 0 ]; then
     if [ "$RES" = "1" ] ; then
-      BROWSER="chromium-browser"
+      BROWSER="chromium"
       BSTRING="Chromium"
     elif [ "$RES" = "2" ] ; then
       BROWSER="firefox"
