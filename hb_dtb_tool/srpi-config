@@ -486,8 +486,10 @@ do_browser() {
   fi
   if [ $? -eq 0 ]; then
     if [ "$RES" = "1" ] ; then
-      BROWSER="chromium"
-      BSTRING="Chromium"
+      if is_installed chromium || apt update && apt-get install -y chromium; then
+        BROWSER="chromium"
+        BSTRING="Chromium"
+      fi
     elif [ "$RES" = "2" ] ; then
       BROWSER="firefox"
       BSTRING="Firefox"
