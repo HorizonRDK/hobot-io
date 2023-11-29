@@ -486,7 +486,7 @@ do_browser() {
   fi
   if [ $? -eq 0 ]; then
     if [ "$RES" = "1" ] ; then
-      if is_installed chromium || apt update && apt-get install -y chromium; then
+      if is_installed chromium || apt update || apt-get install -y chromium; then
         BROWSER="chromium"
         BSTRING="Chromium"
       fi
@@ -502,6 +502,20 @@ do_browser() {
     fi
     if [ "$INTERACTIVE" = True ]; then
       whiptail --msgbox "Default browser set to $BSTRING" 20 60 1
+    fi
+  fi
+}
+
+do_update_miniboot()
+{
+  DEFAULT=--defaultno
+  if [ "$INTERACTIVE" = True ]; then
+    whiptail --yesno "Would you like update the minimal boot image in nand flash?\n\nCaution: Abnormal interruptions are not allowed during the upgrade process!" $DEFAULT 20 60 2
+    RET=$?
+  fi
+  if [ $? -eq 0 ]; then
+    if is_installed hobot-miniboot || apt update || apt-get install -y hobot-miniboot; then
+      rdk-miniboot-update
     fi
   fi
 }
@@ -1268,6 +1282,7 @@ do_system_menu() {
     "S4 Boot / Auto Login" "Select boot into desktop or to command line" \
     "S5 Power LED" "Set behaviour of power LED" \
     "S6 Browser" "Choose default web browser" \
+    "S7 Update Miniboot" "Update the minimal boot image in flash" \
     3>&1 1>&2 2>&3)
 
   RET=$?
@@ -1281,6 +1296,7 @@ do_system_menu() {
       S4\ *) do_boot_behaviour ;;
       S5\ *) do_leds ;;
       S6\ *) do_browser ;;
+      S7\ *) do_update_miniboot ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   fi
