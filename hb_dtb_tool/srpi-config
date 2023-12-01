@@ -1333,21 +1333,6 @@ do_display_menu() {
   fi
 }
 
-do_sound_menu() {
-  FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Sound Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
-    "D1 Sound Device" "Set audio hat type" \
-    3>&1 1>&2 2>&3)
-
-  RET=$?
-  if [ $RET -eq 1 ]; then
-    return 0
-  elif [ $RET -eq 0 ]; then
-    case "$FUN" in
-      D1\ *) do_sound_devices_select ;;
-      *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
-    esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
-  fi
-}
 
 get_cur_audio_hat(){
   if [ -f /etc/hobot_audio_config/cur_audio_hat ]; then
@@ -1360,8 +1345,20 @@ get_cur_audio_hat(){
 do_sound_devices_select() {
   if [ "$INTERACTIVE" = True ]; then
     CUR=$(get_cur_audio_hat)
+    board_type_string=$(get_rdk_type_string)
+    audio_options=("UNSET")
+
+    if [ $board_type_string == "rdk_md" ] || [ $board_type_string == "rdk_v2" ]; then
+      audio_options=("""Audio Driver HAT V2""" ""  """WM8960 Audio HAT"""  ""  ""UNSET"" "")
+    fi
+
+    if [ $board_type_string == "rdk_v1_x" ]; then
+      audio_options=("""Audio Driver HAT V1""" ""  """Audio Driver HAT V2"""  ""  ""UNSET"" "")
+    fi
+
+
     FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item "$CUR" --menu "Select Sound Device" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
-      "Audio Driver HAT V1" "" "Audio Driver HAT V2" "" "WM8960 Audio HAT" "" "UNSET" "" 3>&1 1>&2 2>&3)
+      "${audio_options[@]}" 3>&1 1>&2 2>&3)
     RET=$?
   else
     FUN=$1
@@ -1382,13 +1379,17 @@ do_sound_devices_select() {
     modprobe hobot-i2s-dma
     modprobe hobot-cpudai
     if [ "$FUN" == "WM8960 Audio HAT" ]; then
+      if [ "$CUR" != "UNSET" ]; then
+        do_unset_audio_hat
+        CUR="$FUN"
+      fi
       #remove asound state,for the pa setting
       rm -f /var/lib/alsa/asound.state
       #soft link our pre-set config
       ln -s /etc/hobot_audio_config/wm8960_config/wm8960_asound.state /var/lib/alsa/asound.state
       modprobe snd-soc-wm8960
       modprobe hobot-snd-wm8960
-      alsactl restore
+      alsactl restore > /dev/null 2>&1
       #enable wm8960 audo load at boot (ONLY CODEC DRIVER!)
       if [ -e /lib/modprobe.d/blacklist-hobot-codec-wm8960.conf ]; then
         mv  /lib/modprobe.d/blacklist-hobot-codec-wm8960.conf /lib/modprobe.d/blacklist-hobot-codec-wm8960.disable
@@ -1397,6 +1398,10 @@ do_sound_devices_select() {
     fi
     #if audio is es7210+es8156
     if [ "$FUN" == "Audio Driver HAT V1" ]; then
+      if [ "$CUR" != "UNSET" ]; then
+        do_unset_audio_hat
+        CUR="$FUN"
+      fi
       #enable driver auto load at boot (ONLY CODEC DRIVER!)
       if [ -e /lib/modprobe.d/blacklist-hobot-codec-es7210.conf ]; then
         mv /lib/modprobe.d/blacklist-hobot-codec-es7210.conf /lib/modprobe.d/blacklist-hobot-codec-es7210.disable
@@ -1405,7 +1410,13 @@ do_sound_devices_select() {
     fi
     #same as above
     if [ "$FUN" == "Audio Driver HAT V2" ]; then
-      mv /lib/modprobe.d/blacklist-hobot-codec-es7210.conf /lib/modprobe.d/blacklist-hobot-codec-es7210.disable
+      if [ "$CUR" != "UNSET" ]; then
+        do_unset_audio_hat
+        CUR="$FUN"
+      fi
+      if [ -e /lib/modprobe.d/blacklist-hobot-codec-es7210.conf ]; then
+        mv /lib/modprobe.d/blacklist-hobot-codec-es7210.conf /lib/modprobe.d/blacklist-hobot-codec-es7210.disable
+      fi
       audio_hat_type_string="es7210_es8156"
     fi
     #if user didn't unset audio hat
@@ -1437,35 +1448,41 @@ do_sound_devices_select() {
         #echo 
       fi
       cp  /etc/hobot_audio_config/01_hobot_audio_module.conf /etc/modules-load.d/
-      #enable ii2 driver audo load at boot
+      #enable iis driver audo load at boot
       if [ -e /lib/modprobe.d/blacklist-hobot-iis.conf ]; then
         mv  /lib/modprobe.d/blacklist-hobot-iis.conf /lib/modprobe.d/blacklist-hobot-iis.disable
       fi
     fi
     #if user unset audio hat
     if [ "$FUN" == "UNSET" ]; then
-      #remove auto load module step 1
-      directory="/lib/modprobe.d"
-      for file in "$directory"/*.disable; do
-          if [ -f "$file" ]; then
-              new_name="${file%.disable}.conf"
-              mv  "$file" "$new_name"
-          fi
-      done
-      #remove auto load module step 2
-      rm -fv /etc/modules-load.d/01_hobot_audio_module.conf
-      #restore pulseaudio configuration file step 1
-      if [ -f /etc/hobot_audio_config/original_default.pa ]; then
-        cp  /etc/hobot_audio_config/original_default.pa /etc/pulse/default.pa 
-      elif [ -f /etc/pulse/default.bak ]; then
-        mv  /etc/pulse/default.bak /etc/pulse/default.pa  
-      fi
-      #delete dtoverlay setting step 1
-      sed -i '/^dtoverlay=audio_/d' /boot/config.txt
+      do_unset_audio_hat
     fi
     #set the current audio board type to UNSET step 1
     echo "$FUN" > /etc/hobot_audio_config/cur_audio_hat
+    ASK_TO_REBOOT=1
   fi
+}
+do_unset_audio_hat(){
+  #remove auto load module step 1
+  directory="/lib/modprobe.d"
+  for file in "$directory"/*.disable; do
+    if [ -f "$file" ]; then
+        new_name="${file%.disable}.conf"
+        mv  "$file" "$new_name"
+    fi
+  done
+  #remove auto load module step 2
+  rm -f /etc/modules-load.d/01_hobot_audio_module.conf
+  #remove alsa config step 3
+  rm -f /var/lib/alsa/asound.state
+  #restore pulseaudio configuration file step 1
+  if [ -f /etc/hobot_audio_config/original_default.pa ]; then
+    cp  /etc/hobot_audio_config/original_default.pa /etc/pulse/default.pa 
+  elif [ -f /etc/pulse/default.bak ]; then
+    mv  /etc/pulse/default.bak /etc/pulse/default.pa  
+  fi
+  #delete dtoverlay setting step 1
+  sed -i '/^dtoverlay=audio_/d' /boot/config.txt
 }
 do_interface_menu() {
   if is_rdk2 ; then
@@ -1474,12 +1491,14 @@ do_interface_menu() {
       "I2 VNC" "Enable/disable graphical remote desktop access" \
       "I3 Peripheral bus config" "Enable/disable peripheral bus(spi,i2c,serial,i2s,etc.)" \
       "I4 Configure Wi-Fi antenna" "Configure Wi-Fi antennas to use onboard or external antenna" \
+      "I5 Audio" "Configure audio peripheral functions" \
       3>&1 1>&2 2>&3)
   else
     FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Interfacing Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
       "I1 SSH" "Enable/disable remote command line access using SSH" \
       "I2 VNC" "Enable/disable graphical remote desktop access" \
       "I3 Peripheral bus config" "Enable/disable peripheral bus(spi,i2c,serial,i2s,etc.)" \
+      "I5 Audio" "Configure audio peripheral functions" \
       3>&1 1>&2 2>&3)
   fi
   RET=$?
@@ -1491,6 +1510,7 @@ do_interface_menu() {
       I2\ *) do_vnc ;;
       I3\ *) do_peripheral ;;
       I4\ *) do_wifi_antenna ;;
+      I5\ *) do_sound_devices_select ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   fi
@@ -1610,13 +1630,12 @@ if [ "$INTERACTIVE" = True ]; then
     FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --backtitle "${backtitle}" --menu "Setup Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Finish --ok-button Select \
       "1 System Options" "Configure system settings" \
       "2 Display Options" "Configure display settings" \
-      "3 Sound Options" "Configure sound settings" \
-      "4 Interface Options" "Configure connections to peripherals" \
-      "5 Performance Options" "Configure performance settings" \
-      "6 Localisation Options" "Configure language and regional settings" \
-      "7 Advanced Options" "Configure advanced settings" \
-      "9 Update" "Update this tool to the latest version" \
-      "10 About srpi-config" "Information about this configuration tool" \
+      "3 Interface Options" "Configure connections to peripherals" \
+      "4 Performance Options" "Configure performance settings" \
+      "5 Localisation Options" "Configure language and regional settings" \
+      "6 Advanced Options" "Configure advanced settings" \
+      "8 Update" "Update this tool to the latest version" \
+      "9 About srpi-config" "Information about this configuration tool" \
       3>&1 1>&2 2>&3)
     RET=$?
     if [ $RET -eq 1 ]; then
@@ -1625,13 +1644,12 @@ if [ "$INTERACTIVE" = True ]; then
       case "$FUN" in
         1\ *) do_system_menu ;;
         2\ *) do_display_menu ;;
-        3\ *) do_sound_menu ;;
-        4\ *) do_interface_menu ;;
-        5\ *) do_performance_menu ;;
-        6\ *) do_internationalisation_menu ;;
-        7\ *) do_advanced_menu ;;
-        9\ *) do_update ;;
-        10\ *) do_about ;;
+        3\ *) do_interface_menu ;;
+        4\ *) do_performance_menu ;;
+        5\ *) do_internationalisation_menu ;;
+        6\ *) do_advanced_menu ;;
+        8\ *) do_update ;;
+        9\ *) do_about ;;
         *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
       esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
     else
