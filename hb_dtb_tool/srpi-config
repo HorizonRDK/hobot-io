@@ -950,9 +950,10 @@ get_cpu_boost() {
 do_cpu_boost() {
   if [ "$INTERACTIVE" = True ]; then
     whiptail --msgbox "\
-Be aware that overclocking may reduce the lifetime of your
-RDK. If overclocking at a certain level causes
-system instability, try a more modest overclock.\
+Enabling overclocking will increase CPU power consumption.
+Please install a sufficient radiator(such as enlarging the
+radiator, using a cooling fan) to avoid system instability
+caused by excessive temperature.\
 " 20 70 1
   fi
 
