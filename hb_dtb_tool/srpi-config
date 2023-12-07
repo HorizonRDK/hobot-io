@@ -1330,11 +1330,11 @@ do_sound_devices_select() {
     audio_options=("UNSET")
 
     if [ $board_type_string == "rdk_md" ] || [ $board_type_string == "rdk_v2" ]; then
-      audio_options=("""Audio Driver HAT V2""" ""  """WM8960 Audio HAT"""  ""  ""UNSET"" "")
+      audio_options=("""Audio Driver HAT V2""" "    4 chn input and 2 chn ouput"  """WM8960 Audio HAT"""  "    2 chn input and 2 chn ouput"  ""UNSET"" "    Unset audio driver hat")
     fi
 
     if [ $board_type_string == "rdk_v1_x" ]; then
-      audio_options=("""Audio Driver HAT V1""" ""  """Audio Driver HAT V2"""  ""  ""UNSET"" "")
+      audio_options=("""Audio Driver HAT V1""" "    4 chn input and 2 chn ouput"  """Audio Driver HAT V2"""  "    4 chn input and 2 chn ouput"  ""UNSET"" "    Unset audio driver hat")
     fi
 
 
