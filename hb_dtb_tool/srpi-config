@@ -1375,6 +1375,7 @@ do_sound_devices_select() {
       echo "Unsupport board type"
       return
     fi
+    mkdir -p /etc/pulse/
     #if audio is wm8960 
     modprobe hobot-i2s-dma
     modprobe hobot-cpudai
