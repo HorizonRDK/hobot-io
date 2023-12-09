@@ -421,7 +421,6 @@ do_boot_behaviour() {
 
 do_fb_console_resolution() {
   if [ "$INTERACTIVE" = True ]; then
-
     output=$(get_hdmi_res)
     height=$(echo "$output" | cut -d',' -f1)
     width=$(echo "$output" | cut -d',' -f2)
@@ -434,18 +433,17 @@ do_fb_console_resolution() {
 
     while read -r line; do
       resolution=$(echo "$line" | cut -d ':' -f 2)
-      
-      # check 
-    if [ "$(echo "$resolution" | sed 's/p-[0-9]\+$//')" = "$default_resolution" ]; then
-      default_option_index=${#options[@]}  # 记录当前选项的索引
-    fi
+      if [ "$(echo "$resolution" | sed 's/p-[0-9]\+$//')" = "$default_resolution" ]; then
+        default_option_index=${#options[@]}
+      fi
 
       options+=("$resolution" "")
-      echo $line
       original_lines+=("$line" "")
     done < "$modes_file"
-    # check 
-    chosen_resolution=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item "${options[$default_option_index]}" --menu "Set FB Console Resolution" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT "${options[@]}" --cancel-button Back --ok-button Select 3>&1 1>&2 2>&3)
+
+    chosen_resolution=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item \
+      "${options[$default_option_index]}" --menu "Set FB Console Resolution" $WT_HEIGHT $WT_WIDTH \
+      $WT_MENU_HEIGHT "${options[@]}" --cancel-button Back --ok-button Select 3>&1 1>&2 2>&3)
 
     for ((i=0; i<${#options[@]}; i++)); do
       if [ "${options[$i]}" = "$chosen_resolution" ]; then
@@ -454,7 +452,6 @@ do_fb_console_resolution() {
       fi
     done
 
-    # check 
     echo "$chosen_resolution" > /sys/class/graphics/fb0/mode
 
     read -t 10 -p "Please enter 'yes' in 10 seconds to confirm your selection:   " confirm
