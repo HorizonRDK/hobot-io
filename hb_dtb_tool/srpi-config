@@ -433,6 +433,58 @@ do_boot_behaviour() {
 }
 
 
+do_fb_console_resolution() {
+  if [ "$INTERACTIVE" = True ]; then
+    output=$(get_hdmi_res)
+    height=$(echo "$output" | cut -d',' -f1)
+    width=$(echo "$output" | cut -d',' -f2)
+    default_resolution="${width}x${height}"
+
+    modes_file="/sys/class/graphics/fb0/modes"
+    options=()
+    original_lines=()
+    default_option_index=-1
+
+    while read -r line; do
+      resolution=$(echo "$line" | cut -d ':' -f 2)
+      if [ "$(echo "$resolution" | sed 's/p-[0-9]\+$//')" = "$default_resolution" ]; then
+        default_option_index=${#options[@]}
+      fi
+
+      options+=("$resolution" "")
+      original_lines+=("$line" "")
+    done < "$modes_file"
+
+    chosen_resolution=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item \
+      "${options[$default_option_index]}" --menu "Set FB Console Resolution" $WT_HEIGHT $WT_WIDTH \
+      $WT_MENU_HEIGHT "${options[@]}" --cancel-button Back --ok-button Select 3>&1 1>&2 2>&3)
+
+    for ((i=0; i<${#options[@]}; i++)); do
+      if [ "${options[$i]}" = "$chosen_resolution" ]; then
+        chosen_resolution="${original_lines[$i]}"
+        break
+      fi
+    done
+
+    echo "$chosen_resolution" > /sys/class/graphics/fb0/mode
+
+    read -t 10 -p "Please enter 'yes' in 10 seconds to confirm your selection:   " confirm
+    if [ "$confirm" = "yes" ]; then
+      whiptail --msgbox "Your resolution has been changed:  $chosen_resolution" $WT_HEIGHT $WT_WIDTH
+      set_config_var fb_console_width $(echo "$chosen_resolution" | sed 's/.*:\([0-9]\+\)x\([0-9]\+\).*/\1/') ${CONFIG}
+      set_config_var fb_console_height $(echo "$chosen_resolution" | sed 's/.*:\([0-9]\+\)x\([0-9]\+\).*/\2/') ${CONFIG}
+    else
+      #fall back
+      echo "${original_lines[$default_option_index]}" > /sys/class/graphics/fb0/mode
+      whiptail --msgbox "Your resolution is restored" $WT_HEIGHT $WT_WIDTH
+
+    fi
+    if [ "$INTERACTIVE" = True ]; then
+      ASK_TO_REBOOT=1
+    fi
+  fi
+}
+
 get_leds () {
   if [ ! -e /sys/class/leds/ACT/trigger ] ; then
     echo -1
@@ -1320,6 +1372,7 @@ do_system_menu() {
 do_display_menu() {
   FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Display Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
     "D1 VNC Resolution" "Set resolution for headless use" \
+    "D2 FB Console Resolution" "Set resolution for framebuffer console" \
     3>&1 1>&2 2>&3)
 
   RET=$?
@@ -1328,6 +1381,7 @@ do_display_menu() {
   elif [ $RET -eq 0 ]; then
     case "$FUN" in
       D1\ *) do_vnc_resolution ;;
+      D2\ *) do_fb_console_resolution ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   fi
