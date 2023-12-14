@@ -1155,6 +1155,15 @@ do_cpu_frequency_menu() {
   fi
 }
 
+get_total_memory()
+{
+  total_mem=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+
+  # Round to the nearest 1, 2, 4 or 8 multiple
+  rounded_mem=$(( (total_mem + 512 * 1024) / (1024 * 1024) ))  # Convert to GB and round
+  echo ${rounded_mem}
+}
+
 get_ion_memory ()
 {
   if [ -e /proc/device-tree/reserved-memory/ion_cma/size ] ; then
@@ -1174,8 +1183,14 @@ do_config_ion_memory ()
     if [ "$CUR" = "" ] ; then
       CUR=672MB
     fi
-    FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item $CUR --menu "Set VNC Resolution" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
-      "512MB" "" "672MB" "" "768MB" "" "1024MB" "" "1280MB" "" "1536MB" "" "1664MB" "" "1700MB" "" "1900MB" "Only supported on 4GB memory models" 3>&1 1>&2 2>&3)
+    total_mem=$(get_total_memory)
+    if [ ${total_mem} -ge 4 ]; then
+      FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item $CUR --menu "Set VNC Resolution" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+        "512MB" "" "672MB" "" "768MB" "" "1024MB" "" "1280MB" "" "1536MB" "" "1664MB" "" "1700MB" "" "1900MB" "Only supported on 4GB memory models" 3>&1 1>&2 2>&3)
+    else
+       FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item $CUR --menu "Set VNC Resolution" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
+        "512MB" "" "672MB" "" "768MB" "" "1024MB" "" "1280MB" "" "1536MB" "" "1664MB" "" "1700MB" "" 3>&1 1>&2 2>&3)
+    fi
     RET=$?
   else
     FUN=$1
