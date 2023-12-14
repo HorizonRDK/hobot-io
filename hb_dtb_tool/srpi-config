@@ -1386,8 +1386,7 @@ do_system_menu() {
 
 do_display_menu() {
   FUN=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --menu "Display Options" $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT --cancel-button Back --ok-button Select \
-    "D1 VNC Resolution" "Set resolution for headless use" \
-    "D2 FB Console Resolution" "Set resolution for framebuffer console" \
+    "D1 FB Console Resolution" "Set resolution for framebuffer console" \
     3>&1 1>&2 2>&3)
 
   RET=$?
@@ -1395,8 +1394,7 @@ do_display_menu() {
     return 0
   elif [ $RET -eq 0 ]; then
     case "$FUN" in
-      D1\ *) do_vnc_resolution ;;
-      D2\ *) do_fb_console_resolution ;;
+      D1\ *) do_fb_console_resolution ;;
       *) whiptail --msgbox "Programmer error: unrecognized option" 20 60 1 ;;
     esac || whiptail --msgbox "There was an error running option $FUN" 20 60 1
   fi
