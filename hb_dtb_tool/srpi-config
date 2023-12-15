@@ -901,6 +901,7 @@ do_peripheral() {
               dtb_name="hobot-x3-pi.dtb"
               ;;
           "0x804")
+              config="/etc/hobot.conf/rdkx3_v2_1.conf"
               dtb_name="hobot-x3-pi_v2_1.dtb"
               ;;
           "0xb04")
