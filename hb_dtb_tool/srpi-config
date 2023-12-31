@@ -460,31 +460,39 @@ do_fb_console_resolution() {
     chosen_resolution=$(whiptail --title "RDK Software Configuration Tool (srpi-config)" --default-item \
       "${options[$default_option_index]}" --menu "Set FB Console Resolution" $WT_HEIGHT $WT_WIDTH \
       $WT_MENU_HEIGHT "${options[@]}" --cancel-button Back --ok-button Select 3>&1 1>&2 2>&3)
-
-    for ((i=0; i<${#options[@]}; i++)); do
-      if [ "${options[$i]}" = "$chosen_resolution" ]; then
-        chosen_resolution="${original_lines[$i]}"
-        break
-      fi
-    done
-
-    echo "$chosen_resolution" > /sys/class/graphics/fb0/mode
-
-    read -t 10 -p "Please enter 'yes' in 10 seconds to confirm your selection:   " confirm
-    if [ "$confirm" = "yes" ]; then
-      whiptail --msgbox "Your resolution has been changed:  $chosen_resolution" $WT_HEIGHT $WT_WIDTH
-      set_config_var fb_console_width $(echo "$chosen_resolution" | sed 's/.*:\([0-9]\+\)x\([0-9]\+\).*/\1/') ${CONFIG}
-      set_config_var fb_console_height $(echo "$chosen_resolution" | sed 's/.*:\([0-9]\+\)x\([0-9]\+\).*/\2/') ${CONFIG}
-    else
-      #fall back
-      echo "${original_lines[$default_option_index]}" > /sys/class/graphics/fb0/mode
-      whiptail --msgbox "Your resolution is restored" $WT_HEIGHT $WT_WIDTH
-
-    fi
-    if [ "$INTERACTIVE" = True ]; then
-      ASK_TO_REBOOT=1
-    fi
+    RET=$?
+  else 
+    chosen_resolution=$1
+    RET=0
   fi
+    if [ $RET -eq 1 ]; then
+      return 0
+    elif [ $RET -eq 0 ]; then
+      for ((i=0; i<${#options[@]}; i++)); do
+        if [ "${options[$i]}" = "$chosen_resolution" ]; then
+          chosen_resolution="${original_lines[$i]}"
+          break
+        fi
+      done
+
+      echo "$chosen_resolution" > /sys/class/graphics/fb0/mode
+
+      read -t 10 -p "Please enter 'yes' in 10 seconds to confirm your selection:   " confirm
+      if [ "$confirm" = "yes" ]; then
+        whiptail --msgbox "Your resolution has been changed:  $chosen_resolution" $WT_HEIGHT $WT_WIDTH
+        set_config_var fb_console_width $(echo "$chosen_resolution" | sed 's/.*:\([0-9]\+\)x\([0-9]\+\).*/\1/') ${CONFIG}
+        set_config_var fb_console_height $(echo "$chosen_resolution" | sed 's/.*:\([0-9]\+\)x\([0-9]\+\).*/\2/') ${CONFIG}
+        set_config_var fb_console_refresh_rate $(echo "$chosen_resolution" | sed 's/.*-//') ${CONFIG}
+      else
+        #fall back
+        echo "${original_lines[$default_option_index]}" > /sys/class/graphics/fb0/mode
+        whiptail --msgbox "Your resolution is restored" $WT_HEIGHT $WT_WIDTH
+
+      fi
+      if [ "$INTERACTIVE" = True ]; then
+        ASK_TO_REBOOT=1
+      fi
+    fi
 }
 
 get_leds () {
@@ -1503,13 +1511,13 @@ do_sound_devices_select() {
         echo "dtoverlay="$dtboname"" >> $CONFIG
       fi
       #stop pulseaudio,sometimes it gives some weird errors
-      kill -9 $(pidof pulseaudio)
+      kill -9 $(pidof pulseaudio) > /dev/null 2>&1
       #splice pulse_config
       pulse_config="/etc/hobot_audio_config/"$audio_hat_type_string"_"$board_type_string".pa"
       #echo "$pulse_config"
       if [ ! -f "/etc/hobot_audio_config/original_default.pa" ]; then
         #it mean it's first time that we config audio,backup origin default.pa
-        cp  /etc/pulse/default.pa /etc/hobot_audio_config/original_default.pa
+        cp  /etc/pulse/default.pa /etc/hobot_audio_config/original_default.pa > /dev/null 2>&1
       fi
       #backup config file,and replace it
       if [ -f $pulse_config ]; then
@@ -1524,12 +1532,15 @@ do_sound_devices_select() {
         mv  /lib/modprobe.d/blacklist-hobot-iis.conf /lib/modprobe.d/blacklist-hobot-iis.disable
       fi
     fi
+    #set the current audio board type to UNSET step 1
+    echo "$FUN" > /etc/hobot_audio_config/cur_audio_hat
     #if user unset audio hat
     if [ "$FUN" == "UNSET" ]; then
       do_unset_audio_hat
+      systemctl disable hobot-audio.service
+    else
+      systemctl enable hobot-audio.service
     fi
-    #set the current audio board type to UNSET step 1
-    echo "$FUN" > /etc/hobot_audio_config/cur_audio_hat
     ASK_TO_REBOOT=1
   fi
 }
@@ -1548,7 +1559,7 @@ do_unset_audio_hat(){
   rm -f /var/lib/alsa/asound.state
   #restore pulseaudio configuration file step 1
   if [ -f /etc/hobot_audio_config/original_default.pa ]; then
-    cp  /etc/hobot_audio_config/original_default.pa /etc/pulse/default.pa 
+    cp  /etc/hobot_audio_config/original_default.pa /etc/pulse/default.pa > /dev/null 2>&1
   elif [ -f /etc/pulse/default.bak ]; then
     mv  /etc/pulse/default.bak /etc/pulse/default.pa  
   fi
