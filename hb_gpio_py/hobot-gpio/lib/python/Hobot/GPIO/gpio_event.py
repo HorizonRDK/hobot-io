@@ -5,7 +5,7 @@ except:
     import _thread as thread
 
 from select import epoll, EPOLLIN, EPOLLET, EPOLLPRI
-from time import sleep
+from datetime import datetime
 
 try:
     InterruptedError = InterruptedError
@@ -16,18 +16,19 @@ except:
 EVENT = "EVENT"
 INTERRUPT = "INTERRUPT"
 event_info = {}
+thread_running = False
 mutex = thread.allocate_lock()
-
 
 class EventPro:
     def __init__(self, event, edge=None, bouncetime=None):
         self.event = event
         self.edge = edge
         self.bouncetime = bouncetime
-        self.is_waitting = False
         self.fd_epoll = None
+        self.lastcall = 0
         self.is_occurred = False
         self.init_flag = True
+        self.gpio_value = None
         self.fd_gpio_value = None
         self.callbacks = []
 
@@ -53,7 +54,6 @@ def _add_event_detect(pin_info, pin_name, edge, bouncetime):
     _set_edge(pin_info[pin_name].gpio_edge, edge)
 
     mutex.acquire()
-    event_info[pin_name].is_waitting = True
     event_info[pin_name].fd_gpio_value = open(pin_info[pin_name].gpio_value, 'r')
     mutex.release()
 
@@ -130,7 +130,7 @@ def _exe_callback(pin_name):
 
 
 def _poll_thread(pin_info, pin_name):
-    global event_info
+    global event_info, thread_running
     res = None
 
     thread_running = True
@@ -145,46 +145,43 @@ def _poll_thread(pin_info, pin_name):
 
             fd = event_info[pin_name].fd_gpio_value
             fd.seek(0)
-            if len(fd.read().rstrip()) != 1:
+            gpio_value = fd.read().rstrip()
+            if len(gpio_value) != 1:
                 thread_running = False
                 thread.exit()
 
             if event_info[pin_name].init_flag:
+                mutex.acquire()
                 event_info[pin_name].init_flag = False
+                event_info[pin_name].gpio_value = gpio_value
+                mutex.release()
                 continue
             else:
-                if ((event_info[pin_name].bouncetime is None) or
-                        (event_info[pin_name].bouncetime == 0)):
-                    mutex.acquire()
-                    event_info[pin_name].is_waitting = False
-                    mutex.release()
-                    thread_running = False
-                    _exe_callback(pin_name)
-                else:
-                    event_info[pin_name].fd_gpio_value.seek(0)
-                    tmp = event_info[pin_name].fd_gpio_value.read().rstrip()
+                if ((event_info[pin_name].edge == "RISING" and int(gpio_value) > int(event_info[pin_name].gpio_value)) or
+                    (event_info[pin_name].edge == "FALLING" and int(gpio_value) < int(event_info[pin_name].gpio_value)) or
+                    (event_info[pin_name].edge == "BOTH" and int(gpio_value) != int(event_info[pin_name].gpio_value))):
 
-                    sleep(event_info[pin_name].bouncetime / 1000)
-
-                    event_info[pin_name].fd_gpio_value.seek(0)
-                    tmp1 = event_info[pin_name].fd_gpio_value.read().rstrip()
-
-                    if tmp != tmp1:
-                        continue
-                    else:
+                    # debounce the input event for the specified bouncetimez
+                    time = datetime.now()
+                    time = time.second * 1E6 + time.microsecond
+                    if (event_info[pin_name].bouncetime is None or
+                            (time - event_info[pin_name].lastcall >
+                            event_info[pin_name].bouncetime * 1000) or
+                            (event_info[pin_name].lastcall == 0) or event_info[pin_name].lastcall > time):
                         mutex.acquire()
-                        event_info[pin_name].is_waitting = False
+                        event_info[pin_name].lastcall = time
+                        event_info[pin_name].event_occurred = True
                         mutex.release()
-                        thread_running = False
                         _exe_callback(pin_name)
+
+                mutex.acquire()
+                event_info[pin_name].gpio_value = gpio_value
+                mutex.release()
         except InterruptedError:
             continue
         except AttributeError as exc :
             print('AttributeError occured, ', exc)
             break
-        finally:
-            if mutex.locked():
-                mutex.release()
     thread.exit()
 
 
@@ -192,6 +189,7 @@ def _add_event_block(pin_info, pin_name, edge, bouncetime, timeout):
     global event_info
     finished = False
     res = None
+    init_gpio_value = None
 
     if event_info.__contains__(pin_name):
         if event_info[pin_name].event == INTERRUPT:
@@ -203,7 +201,6 @@ def _add_event_block(pin_info, pin_name, edge, bouncetime, timeout):
     _set_edge(pin_info[pin_name].gpio_edge, edge)
 
     mutex.acquire()
-    event_info[pin_name].is_waitting = True
     event_info[pin_name].fd_gpio_value = open(pin_info[pin_name].gpio_value, 'r')
     mutex.release()
 
@@ -227,35 +224,32 @@ def _add_event_block(pin_info, pin_name, edge, bouncetime, timeout):
         except InterruptedError:
             continue
 
+        fd = event_info[pin_name].fd_gpio_value
+        fd.seek(0)
+        gpio_value = fd.read().rstrip()
         if event_info[pin_name].init_flag:
             event_info[pin_name].init_flag = False
+            init_gpio_value = gpio_value
             continue
         else:
-            if ((event_info[pin_name].bouncetime is None) or
-                    (event_info[pin_name].bouncetime == 0)):
-                mutex.acquire()
-                event_info[pin_name].is_waitting = False
-                mutex.release()
-                finished = True
-            else:
-                event_info[pin_name].fd_gpio_value.seek(0)
-                tmp = event_info[pin_name].fd_gpio_value.read().rstrip()
-
-                sleep(event_info[pin_name].bouncetime / 1000)
-
-                event_info[pin_name].fd_gpio_value.seek(0)
-                tmp1 = event_info[pin_name].fd_gpio_value.read().rstrip()
-
-                if tmp != tmp1:
-                    continue
-                else:
+            if ((edge == "RISING" and int(gpio_value) > int(init_gpio_value)) or
+                (edge == "FALLING" and int(gpio_value) < int(init_gpio_value)) or
+                (edge == "BOTH" and int(gpio_value) != int(init_gpio_value))):
+                # debounce the input event for the specified bouncetime
+                time = datetime.now()
+                time = time.second * 1E6 + time.microsecond
+                if (event_info[pin_name].bouncetime is None or
+                        (time - event_info[pin_name].lastcall >
+                            event_info[pin_name].bouncetime * 1000) or
+                        (event_info[pin_name].lastcall == 0) or
+                        (event_info[pin_name].lastcall > time)):
                     mutex.acquire()
-                    event_info[pin_name].is_waitting = False
+                    event_info[pin_name].lastcall = time
                     mutex.release()
                     finished = True
+            init_gpio_value = gpio_value
     if res:
         fileno = res[0][0]
-        fd = event_info[pin_name].fd_gpio_value
         if fileno != fd.fileno():
             _del_event(pin_info, pin_name)
             print("File handle not found")
@@ -276,7 +270,8 @@ def _add_event_block(pin_info, pin_name, edge, bouncetime, timeout):
 
 
 def _event_cleanup(pin_info, pin_name):
-    global event_info
+    global event_info, thread_running
 
+    thread_running = False
     if event_info.__contains__(pin_name):
         _del_event(pin_info, pin_name)

@@ -349,7 +349,8 @@ def wait_for_edge(channel, edge, bouncetime=None, timeout=None):
     if pin_info[pin_name].pin_status != IN:
         raise RuntimeError("This channel must be setup as an input")
     if edge not in EDGE_LIST:
-        raise ValueError("Channel edge setting is invalid")
+        raise ValueError("The edge must be set to RISING, FALLING_EDGE "
+                         "or BOTH")
     if bouncetime:
         if bouncetime < 0:
             raise ValueError("bouncetime must be an integer greater than 0")
