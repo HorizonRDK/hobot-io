@@ -1420,6 +1420,32 @@ get_cur_audio_hat(){
   fi
 }
 
+BOARD_MEMORY_SIZE=0
+getMemorySize()
+{
+    if [ -f "/sys/class/socinfo/ddr_size" ]; then
+        BOARD_MEMORY_SIZE="$(cat /sys/class/socinfo/ddr_size | tr -d ' \n')"
+    else
+      echo "No RDK memory size found"
+      exit ${EXIT_SUCCESS}
+    fi
+}
+
+# Find latest applicable update version
+MINIBOOT_UPDATE_IMAGE=""
+MINIBOOT_UPDATE_VERSION=0
+getMinibootUpdateVersion()
+{
+   MINIBOOT_UPDATE_VERSION=0
+   getMemorySize
+   match=".*/disk_nand_minimum_boot_${BOARD_MEMORY_SIZE}GB_3V3_[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9].img"
+   latest="$(find "/lib/firmware/rdk/miniboot/default/" -maxdepth 1 -type f -follow -regex "${match}" | sort -r | head -n1)"
+   if [ -f "${latest}" ]; then
+      MINIBOOT_UPDATE_VERSION=$(basename "${latest}" | awk -F_ '{print $NF}' | sed 's/\.img//')
+      MINIBOOT_UPDATE_IMAGE="${latest}"
+   fi
+}
+
 do_sound_devices_select() {
   if [ "$INTERACTIVE" = True ]; then
     CUR=$(get_cur_audio_hat)
@@ -1540,6 +1566,13 @@ do_sound_devices_select() {
       systemctl disable hobot-audio.service
     else
       systemctl enable hobot-audio.service
+    fi
+    # check miniboot version
+    cur_miniboot_version=$(strings /dev/mtd0 | grep -E "U-Boot 2018.09.*\(" | head -n 1)
+    getMinibootUpdateVersion
+    latest_miniboot_version=$(strings $MINIBOOT_UPDATE_IMAGE | grep -E "U-Boot 2018.09.*\(" | head -n 1)
+    if [ "$cur_miniboot_version" != "$latest_miniboot_version" ];then
+      whiptail --msgbox "Your miniboot version is: $cur_miniboot_version\n\nThe latest miniboot version is: $latest_miniboot_version \n\nMaybe you need to update miniboot to enable sound card.\n\nEnter 1 System Options -> S7 Update Miniboot to upgrade miniboot." $WT_HEIGHT $WT_WIDTH $WT_MENU_HEIGHT
     fi
     ASK_TO_REBOOT=1
   fi
