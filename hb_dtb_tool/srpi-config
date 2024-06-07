@@ -562,9 +562,16 @@ do_browser() {
   fi
   if [ $? -eq 0 ]; then
     if [ "$RES" = "1" ] ; then
-      if is_installed chromium || apt update || apt-get install -y chromium; then
+      if is_installed chromium; then
         BROWSER="chromium"
         BSTRING="Chromium"
+      else
+        add-apt-repository ppa:xtradeb/apps -y
+        apt update
+        if apt-get install -y chromium; then
+          BROWSER="chromium"
+          BSTRING="Chromium"
+        fi
       fi
     elif [ "$RES" = "2" ] ; then
       BROWSER="firefox"
